@@ -1,0 +1,9 @@
+.venv
+.studio
+.env
+.env.*
+.git
+__pycache__
+.pytest_cache
+*.sqlite*
+*token*.json

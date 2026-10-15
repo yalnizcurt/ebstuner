@@ -1,0 +1,10 @@
+.venv/
+.studio/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
+*.sqlite*
+*token*.json

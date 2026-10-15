@@ -1,0 +1,19 @@
+services:
+  studio:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - studio-data:/app/.studio
+    environment:
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+      BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
+      BEDROCK_STRUCTURED_MODE: ${BEDROCK_STRUCTURED_MODE:-json_schema}
+      STUDIO_ACCESS_TOKEN: ${STUDIO_ACCESS_TOKEN:-}
+      STUDIO_RETENTION_DAYS: ${STUDIO_RETENTION_DAYS:-7}
+      STUDIO_ALLOW_DRAFT_EXPORT: ${STUDIO_ALLOW_DRAFT_EXPORT:-false}
+    restart: unless-stopped
+volumes:
+  studio-data:

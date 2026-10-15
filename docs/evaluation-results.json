@@ -1,0 +1,211 @@
+{
+  "run_at": "2026-10-15T17:16:22.115484+00:00",
+  "dataset": "synthetic-v1",
+  "cases": [
+    {
+      "case": "correct",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 3.804
+    },
+    {
+      "case": "missing_trailing_spaces",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 5,
+      "ground_truth_recovered_in_returned_candidates": true,
+      "latency_ms": 2.683
+    },
+    {
+      "case": "missing_internal_space",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 2,
+      "ground_truth_recovered_in_returned_candidates": true,
+      "latency_ms": 0.251
+    },
+    {
+      "case": "shifted_fields",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 2,
+      "ground_truth_recovered_in_returned_candidates": true,
+      "latency_ms": 0.296
+    },
+    {
+      "case": "truncated_record",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": false,
+      "latency_ms": 2.913
+    },
+    {
+      "case": "wrong_field_width",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": false,
+      "latency_ms": 0.135
+    },
+    {
+      "case": "malformed_date",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.034
+    },
+    {
+      "case": "malformed_numeric",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.032
+    },
+    {
+      "case": "incorrect_identifier",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.017
+    },
+    {
+      "case": "multi_matching_when",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.125
+    },
+    {
+      "case": "unmapped_bytes",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.044
+    },
+    {
+      "case": "large_fixed_width",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.85
+    },
+    {
+      "case": "CRLF",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.051
+    },
+    {
+      "case": "LF",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.042
+    },
+    {
+      "case": "leading_zero_identifiers",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.042
+    },
+    {
+      "case": "unsupported_ctl",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.09
+    },
+    {
+      "case": "lockbox_valid",
+      "expected_structurally_valid": true,
+      "observed_structurally_valid": true,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 0,
+      "ground_truth_recovered_in_returned_candidates": null,
+      "latency_ms": 0.877
+    },
+    {
+      "case": "lockbox_truncated",
+      "expected_structurally_valid": false,
+      "observed_structurally_valid": false,
+      "correct_classification": true,
+      "byte_identical_round_trip": true,
+      "candidates": 5,
+      "ground_truth_recovered_in_returned_candidates": true,
+      "latency_ms": 319.072
+    }
+  ],
+  "metrics": {
+    "structural_validation_accuracy": 1.0,
+    "exact_top_candidate_reconstruction_rate": 0.3333333333333333,
+    "exact_returned_candidate_reconstruction_rate": 0.6666666666666666,
+    "reconstruction_cases": 6,
+    "returned_candidates": 14,
+    "dat_preservation_rate": 1.0,
+    "automatic_repairs_applied": 0,
+    "false_auto_repair_rate": null,
+    "human_approval_requirement_rate": 1.0,
+    "field_mapping_accuracy_exact_headers": 1.0,
+    "ai_proposal_acceptance_rate": null,
+    "live_bedrock_calls": 0,
+    "bedrock_tokens_observed": 0,
+    "cost_per_live_analysis_usd": null,
+    "processing_latency_mean_ms": 18.409,
+    "processing_latency_max_ms": 319.072
+  },
+  "notes": [
+    "Rates describe this small synthetic corpus, not production accuracy.",
+    "False auto-repair rate is undefined: this policy performs no automatic repairs.",
+    "Human approval requirement measures proposals, not actual human decisions.",
+    "Mapping metric covers deterministic exact headers only.",
+    "No live Bedrock invocation; live acceptance, tokens per analysis and cost are unmeasured."
+  ]
+}

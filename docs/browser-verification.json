@@ -1,0 +1,13 @@
+{
+  "workflow": "Browser upload -> diagnostics -> reviewed reconstruction -> field edit -> undo -> keyed CSV reconciliation -> generate -> download",
+  "record_count": 6,
+  "structural_findings_after_repair": 0,
+  "spreadsheet_unique_matches": 2,
+  "spreadsheet_conflicts": 0,
+  "download_matches_known_good_bytes": true,
+  "sha256": "a45a1cf16ce5f02f55ce38c2e237a82738988bbaf6a592e74403fa92365f23ab",
+  "approval_dialog": "In-page dialog: cancel preserves bytes; confirmed reset and undo both verified",
+  "screenshot": "studio-verified.png",
+  "live_bedrock": "Not configured; no live invocation performed",
+  "byte_inspector": "Record 3: 105 bytes, CRLF, actual hex verified"
+}
