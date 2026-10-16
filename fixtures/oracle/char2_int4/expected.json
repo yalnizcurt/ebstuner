@@ -1,0 +1,63 @@
+{
+  "id": "char2_int4",
+  "title": "6 bytes \u00b7 CHAR(2) + INTEGER EXTERNAL(4)",
+  "description": "Two character bytes followed by four readable numeric bytes. These are two fields, not a CHAR2INT4 datatype.",
+  "supported": true,
+  "record_length": 6,
+  "record_count": 3,
+  "record_format": "stream",
+  "encoding": "ascii",
+  "line_ending": "CRLF",
+  "keys": [
+    "CODE"
+  ],
+  "fields": [
+    {
+      "name": "CODE",
+      "start": 1,
+      "end": 2,
+      "width": 2
+    },
+    {
+      "name": "QUANTITY",
+      "start": 3,
+      "end": 6,
+      "width": 4
+    }
+  ],
+  "variants": [
+    {
+      "id": "correct",
+      "label": "Correct input",
+      "file": "correct.dat",
+      "expected_valid": true,
+      "expected_records_with_findings": 0,
+      "exercise": "Inspect all fields, then generate and compare the untouched output.",
+      "sha256": "b14adf55ae0c169c69b9d33a980e61b3e8463c195aa00466f5dec1747a7f07c0",
+      "record_lengths": [
+        6,
+        6,
+        6
+      ]
+    },
+    {
+      "id": "bad_numeric",
+      "label": "Invalid integer",
+      "file": "bad_numeric.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "Record 2 QUANTITY contains X. Reconcile reference.csv using CODE as the unique key; review the proposed -012 value.",
+      "sha256": "3583b14eadac9875deff377cde06a056b2aa29109010cbca60c91e2e855956ef",
+      "record_lengths": [
+        6,
+        6,
+        6
+      ]
+    }
+  ],
+  "sources": [
+    "https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html",
+    "https://docs.oracle.com/cd/E18727_01/doc.121/e13510/T447343T454906.htm"
+  ],
+  "scope": "Synthetic custom XX staging schema. Not a copy of ardeft.ctl, arconv.ctl or an EBS certification."
+}

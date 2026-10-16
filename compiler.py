@@ -227,9 +227,9 @@ def compile_field(source, ts, cursor):
         else: start = cursor
         if i < len(ts) and ts[i].kind == 'word':
             dtype = ts[i].value; i += 1
-            if dtype in ('INTEGER', 'DECIMAL') and i < len(ts) and word(ts[i], 'EXTERNAL'):
+            if dtype in ('INTEGER', 'DECIMAL', 'FLOAT', 'ZONED') and i < len(ts) and word(ts[i], 'EXTERNAL'):
                 dtype += ' EXTERNAL'; i += 1
-        if dtype not in ('CHAR', 'DATE', 'INTEGER EXTERNAL', 'DECIMAL EXTERNAL'): errors.append(f'{name}: unsupported datatype {dtype}')
+        if dtype not in ('CHAR', 'DATE', 'INTEGER EXTERNAL', 'DECIMAL EXTERNAL', 'FLOAT EXTERNAL', 'ZONED EXTERNAL'): errors.append(f'{name}: unsupported datatype {dtype}; native/binary formats require Oracle runtime')
         if i < len(ts) and ts[i].value == '(':
             j = closing(ts, i)
             if j != i + 2 or ts[i + 1].kind != 'number': errors.append(f'{name}: unsupported datatype length')
@@ -239,7 +239,7 @@ def compile_field(source, ts, cursor):
             mask = ts[i].value.upper(); i += 1
         if dtype == 'DATE' and mask not in ('RRMMDD', 'MMDDRR', 'YYMMDD', 'MMDDYY', 'YYYYMMDD', 'YYYY-MM-DD', 'DD-MON-YYYY', 'DDMMYYYY', 'MM/DD/YYYY'):
             errors.append(f'{name}: unsupported DATE mask {mask or "(implicit NLS mask)"}')
-        if not end and not width and dtype in ('INTEGER EXTERNAL', 'DECIMAL EXTERNAL'): errors.append(f'{name}: an explicit numeric byte length is required')
+        if not end and not width and dtype.endswith(' EXTERNAL'): errors.append(f'{name}: an explicit numeric byte length is required')
         end = end or start + (width or (len(mask) if dtype == 'DATE' else 1)) - 1
         if start < 1 or end < start or end > 1_000_000: raise ValueError(f'{name}: invalid or excessive byte range')
         if width and width != end - start + 1: errors.append(f'{name}: datatype length differs from POSITION width')
@@ -311,7 +311,7 @@ def compile_ctl(source: str) -> Schema:
         while i < stop:
             if ts[i].value == '(' and ts[i].kind == 'symbol':
                 j = closing(ts, i)
-                if i + 2 < j and ts[i + 1].kind in ('word', 'quoted') and ts[i + 2].value in ('POSITION', 'FILLER', 'BOUNDFILLER', 'CONSTANT', 'CHAR', 'DATE', 'INTEGER', 'DECIMAL'):
+                if i + 2 < j and ts[i + 1].kind in ('word', 'quoted') and ts[i + 2].value in ('POSITION', 'FILLER', 'BOUNDFILLER', 'CONSTANT', 'CHAR', 'DATE', 'INTEGER', 'DECIMAL', 'FLOAT', 'ZONED'):
                     opening = i; break
                 i = j + 1
             else: i += 1

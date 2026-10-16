@@ -1,0 +1,27 @@
+{
+  "verified_date": "2026-10-17",
+  "browser": "Codex in-app browser",
+  "checks": {
+    "sample_library_and_variants_visible": true,
+    "sample_load_creates_new_project": true,
+    "full_two_character_record_type_visible": true,
+    "review_confirmation_dialog": true,
+    "approved_4800_trailing_padding": true,
+    "zero_remaining_findings": true,
+    "generation_enabled_download": true,
+    "groq_model_connection_verified_in_ui": true
+  },
+  "generated_sha256": "4bd159c8b5b421afa6976a7185f7667924385e6dd35c36cc30d1546f625b38e4",
+  "download_verification": "The API download was compared byte for byte to correct.dat. The browser download control was exercised; its resulting local file path was not observed.",
+  "screenshots": [
+    "studio-oracle-samples.png",
+    "studio-4800-verified.png",
+    "studio-groq-verified.png"
+  ],
+  "live_api_evidence": "groq-workflow-verification.json",
+  "regression_suite": {
+    "passed": 145,
+    "skipped": 1,
+    "failed": 0
+  }
+}

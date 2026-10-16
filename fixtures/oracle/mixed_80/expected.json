@@ -1,0 +1,98 @@
+{
+  "id": "mixed_80",
+  "title": "80 bytes \u00b7 text, integer, decimal and date",
+  "description": "Leading-zero IDs, a signed amount, leap-day date and trailing text padding.",
+  "supported": true,
+  "record_length": 80,
+  "record_count": 2,
+  "record_format": "stream",
+  "encoding": "ascii",
+  "line_ending": "CRLF",
+  "keys": [
+    "TRANSACTION_ID"
+  ],
+  "fields": [
+    {
+      "name": "RECORD_TYPE",
+      "start": 1,
+      "end": 2,
+      "width": 2
+    },
+    {
+      "name": "TRANSACTION_ID",
+      "start": 3,
+      "end": 12,
+      "width": 10
+    },
+    {
+      "name": "QUANTITY",
+      "start": 13,
+      "end": 16,
+      "width": 4
+    },
+    {
+      "name": "AMOUNT",
+      "start": 17,
+      "end": 28,
+      "width": 12
+    },
+    {
+      "name": "TRANSACTION_DATE",
+      "start": 29,
+      "end": 36,
+      "width": 8
+    },
+    {
+      "name": "COMMENTS",
+      "start": 37,
+      "end": 80,
+      "width": 44
+    }
+  ],
+  "variants": [
+    {
+      "id": "correct",
+      "label": "Correct input",
+      "file": "correct.dat",
+      "expected_valid": true,
+      "expected_records_with_findings": 0,
+      "exercise": "Inspect all fields, then generate and compare the untouched output.",
+      "sha256": "84b78d30781ccd8aafef7600ebb157f0cb4422f3d02671169fde6d0e4279d0ab",
+      "record_lengths": [
+        80,
+        80
+      ]
+    },
+    {
+      "id": "missing_spaces",
+      "label": "Seven trailing spaces removed",
+      "file": "missing_spaces.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "Approve the trailing-padding candidate for record 2; compare the download to correct.dat.",
+      "sha256": "8f43ee0bfe8c8d47eebb3a7bc5c8ad0232254e11ddfb826659ebbd3d1c757aa9",
+      "record_lengths": [
+        80,
+        73
+      ]
+    },
+    {
+      "id": "bad_date",
+      "label": "Invalid leap day",
+      "file": "bad_date.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "A full-length record can still contain an invalid calendar date.",
+      "sha256": "b0c5a5f65cf86e10faa00904c291c5acf9c205244b209cfbb6d37bed1f6fdae2",
+      "record_lengths": [
+        80,
+        80
+      ]
+    }
+  ],
+  "sources": [
+    "https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html",
+    "https://docs.oracle.com/cd/E18727_01/doc.121/e13510/T447343T454906.htm"
+  ],
+  "scope": "Synthetic custom XX staging schema. Not a copy of ardeft.ctl, arconv.ctl or an EBS certification."
+}

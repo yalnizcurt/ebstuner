@@ -1,0 +1,2 @@
+-- Synthetic custom staging layout; not an Oracle-delivered EBS control file.
+LOAD DATA INTO TABLE XX_CSV FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' (CODE CHAR(2), QUANTITY INTEGER EXTERNAL(4))

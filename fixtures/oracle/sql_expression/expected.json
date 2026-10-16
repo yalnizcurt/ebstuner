@@ -1,0 +1,45 @@
+{
+  "id": "sql_expression",
+  "title": "Unsupported \u00b7 SQL transformation",
+  "description": "Oracle evaluates TO_NUMBER(:AMOUNT)/100. Studio retains it as metadata and blocks validated export instead of executing SQL.",
+  "supported": false,
+  "record_length": 10,
+  "record_count": 1,
+  "record_format": "stream",
+  "encoding": "ascii",
+  "line_ending": "CRLF",
+  "keys": [],
+  "fields": [
+    {
+      "name": "CODE",
+      "start": 1,
+      "end": 2,
+      "width": 2
+    },
+    {
+      "name": "AMOUNT",
+      "start": 3,
+      "end": 10,
+      "width": 8
+    }
+  ],
+  "variants": [
+    {
+      "id": "correct",
+      "label": "Unsupported reference input",
+      "file": "correct.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "Read the compatibility findings. Validated export must remain blocked.",
+      "sha256": "af89d114ffb250a0f8967071320e3026780b8fa228f7a6c91922d6759d97581e",
+      "record_lengths": [
+        10
+      ]
+    }
+  ],
+  "sources": [
+    "https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html",
+    "https://docs.oracle.com/cd/E18727_01/doc.121/e13510/T447343T454906.htm"
+  ],
+  "scope": "Synthetic custom XX staging schema. Not a copy of ardeft.ctl, arconv.ctl or an EBS certification."
+}

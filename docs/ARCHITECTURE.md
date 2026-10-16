@@ -10,11 +10,17 @@ Browser workstation (same-origin static HTML, CSS, JavaScript)
      -> raw record reader, field validation, exact byte patches (engine.py)
      -> bounded insertion beam + banded edit distance + scoring (reconstruction.py)
      -> all-sheet import, explicit keys, conflict/spec comparison (spreadsheets.py)
-     -> selected capability context -> AmazonBedrockProvider (bedrock.py)
+     -> selected capability context -> configured provider (ai.py)
+        -> GroqProvider (groq_provider.py), default openai/gpt-oss-120b
+        -> OR AmazonBedrockProvider (bedrock.py), explicit opt-in
         -> strict response validation -> evidence/width/routing checks
         -> pending proposals -> explicit human review -> deterministic patches
      -> generation -> re-parse -> original/approved byte checks -> download
 ```
+
+`ai.py` loads backend-only `.env` settings without executing shell code; existing environment variables win. Provider selection is explicit (`LLM_PROVIDER=groq` by default, or `bedrock`) and never falls back after an error. Groq uses direct HTTPS Chat Completions with strict JSON Schema responses and the existing typed review/evidence checks. The browser receives safe provider/model status, never credentials.
+
+`build_samples.py` produces the versioned `fixtures/oracle/manifest.json` library and its synthetic CTL/DAT/reference files. Read-only sample APIs expose the manifest and ZIPs. Loading a sample uses the same versioned, owner-scoped import path as uploaded files and requires a fresh project; immutable originals remain independent from edits.
 
 Compiler fields carry source declarations, positions, widths, datatypes, masks, constants, filler roles, null/default predicates and SQL metadata. Every supported destination is evaluated independently; unknown conditions remain unknown. Schema gaps do not become padding instructions automatically.
 
@@ -22,7 +28,7 @@ Project state stores immutable original bytes and working bytes as base64 in a p
 
 `models.py` validates public project, diagnostic, record-page and proposal response contracts while retaining explicit compiler extension metadata. The browser requests paginated diagnostic rows, a paginated cell grid and paginated proposals. Field cells carry branch identifiers. Explicit assumed-layout editing allows repairing an unclassified marker while keeping actual destination evaluation separate. Date/numeric issues remain visible during manual editing; validated export is blocked until structural errors are resolved. Source and working bytes remain independent.
 
-Specialized AI capabilities share one provider and one bounded orchestration route. Schema/mapping calls receive metadata; investigation/explanation/recovery receive one selected record's findings. Values are masked by default. Semantic recovery requires explicit value-sharing consent and exact evidence from a unique key match; the backend validates every reference/value and cannot execute generated code or SQL. A single request produces at most one model call with bounded retries. No autonomous tool execution or recursive model calls exist.
+Specialized AI capabilities share one explicitly selected provider and one bounded orchestration route. Schema/mapping calls receive metadata; investigation/explanation/recovery receive one selected record's findings. Values are masked by default. Semantic recovery requires explicit value-sharing consent and exact evidence from a unique key match; the backend validates every reference/value and cannot execute generated code or SQL. A single request produces at most one model call with bounded retries. No autonomous tool execution or recursive model calls exist.
 
 Generation re-parses the exact working bytes, checks source round-trip fidelity, records field/routing differences, and verifies applied proposals against their exact serialized ranges. It preserves each record ending and original order. Semantic spreadsheet warnings can coexist with structural validation; unsupported CTL behavior blocks a validated download. Draft export is a separate explicit policy.
 

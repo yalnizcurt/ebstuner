@@ -142,7 +142,7 @@ def field_value(f, row, branch=None, branches=None, encoding='ascii'):
     if branch and f.nullif and evaluate_condition(f.nullif, row, branch, branches or [branch], encoding) is True: return None
     if not value: return None
     if branch and f.defaultif and evaluate_condition(f.defaultif, row, branch, branches or [branch], encoding) is True:
-        return '0' if f.dtype in ('INTEGER EXTERNAL', 'DECIMAL EXTERNAL') else None
+        return '0' if f.dtype.endswith(' EXTERNAL') else None
     return value
 
 
@@ -153,7 +153,8 @@ def field_issues(f: Field, row: bytes, encoding='ascii', branch=None, branches=N
     if value is None: return []
     s = value.strip(' \t')
     pattern = r'[+-]?\d+' if f.dtype == 'INTEGER EXTERNAL' else r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)'
-    if f.dtype in ('INTEGER EXTERNAL', 'DECIMAL EXTERNAL') and not re.fullmatch(pattern, s, re.ASCII):
+    if f.dtype == 'FLOAT EXTERNAL': pattern += r'(?:[eE][+-]?\d+)?'
+    if f.dtype.endswith(' EXTERNAL') and not re.fullmatch(pattern, s, re.ASCII):
         return [f'{f.name}: invalid {f.dtype}']
     if f.dtype == 'DATE' and f.date_mask in DATE_FORMATS:
         if len(s) != len(f.date_mask): return [f'{f.name}: invalid date width for {f.date_mask}']
@@ -185,7 +186,10 @@ def inspect_record(schema, row, idx, encoding='ascii', fixed_length=None):
     if fixed_length and len(row) != fixed_length: issues.append(f'Fixed record requires exactly {fixed_length} bytes')
     if any(x < 32 and x not in (9,) for x in row): issues.append('Control bytes in record; binary input is unsupported')
     minimum = max((schema.branches[bi].minimum_length for bi in matching), default=0)
-    return {'record': idx, 'length': len(row), 'record_type': row[:1].decode(encoding),
+    markers = {(f.start, f.end) for b in schema.branches for f in b.fields if f.name in ('RECORD_TYPE', 'RT') and f.start and not f.sql_expression}
+    marker_start, marker_end = next(iter(markers)) if len(markers) == 1 else (1, 1)
+    marker = row[marker_start - 1:marker_end]
+    return {'record': idx, 'length': len(row), 'record_type': marker.decode(encoding).strip(' \t'),
             'branches': [{'index': x, 'table': schema.branches[x].table} for x in matching],
             'uncertain_branches': uncertain, 'unmatched_branches': unmatched, 'minimum_length': minimum,
             'issues': list(dict.fromkeys(issues)), 'findings': findings, 'unsupported': unsupported,

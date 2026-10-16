@@ -3,6 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 import web
+from bedrock import AmazonBedrockProvider
 from projects import Repository
 
 ROOT=Path(__file__).parents[1]
@@ -11,6 +12,7 @@ H={'X-Studio-Request':'1'}
 @pytest.fixture
 def client(tmp_path,monkeypatch):
     monkeypatch.setattr(web,'repository',Repository(tmp_path/'projects.sqlite3'))
+    monkeypatch.setattr(web,'provider',AmazonBedrockProvider())
     for key in ['STUDIO_ACCESS_TOKEN','STUDIO_ENV','STUDIO_ALLOW_DRAFT_EXPORT','AWS_BEARER_TOKEN_BEDROCK','BEDROCK_TOKEN_FILE','BEDROCK_MODEL_ID','AWS_REGION']:
         monkeypatch.delenv(key,raising=False)
     web.rates.clear()

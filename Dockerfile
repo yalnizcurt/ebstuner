@@ -5,6 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home studio
 COPY *.py index.html ./
 COPY static ./static
+COPY fixtures/oracle ./fixtures/oracle
 RUN mkdir .studio && chown studio:studio .studio
 USER studio
 EXPOSE 8000

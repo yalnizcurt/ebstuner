@@ -1,4 +1,6 @@
-# Repository audit — 15 October 2026
+# Historical starting-repository audit — 15 October 2026
+
+This is the pre-implementation snapshot, retained to explain the original work. It does not describe the current repository. The current provider is Groq by default, with Bedrock opt-in; see the [README](../README.md) and [Oracle examples guide](ORACLE_EXAMPLES.md).
 
 The starting repository contains a standard-library deterministic engine, FastAPI backend, single HTML/JavaScript UI, one synthetic multi-table Lockbox CTL, two DAT files, a CSV and eight pytest tests. All eight original tests pass. There is no Git repository in the supplied directory. The host Python has pytest but lacks the web dependencies; an isolated development environment will be created.
 

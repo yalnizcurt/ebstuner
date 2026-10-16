@@ -1,0 +1,98 @@
+{
+  "provider": "Groq",
+  "model_id": "openai/gpt-oss-120b",
+  "connection_status": "connected",
+  "sample_id": "receipt_4800",
+  "variant": "missing_spaces",
+  "record_lengths": [
+    4800,
+    4786
+  ],
+  "masked_explanation": {
+    "result": {
+      "status": "OK",
+      "summary": "Record 2 contains a structural issue: the COMMENTS field is truncated at byte 4786 but the record expects data through byte 4800. This is a recoverable structural error. No deterministic mapping changes are required for other fields.",
+      "proposals": [],
+      "mappings": [],
+      "observations": [
+        "The COMMENTS field does not reach its defined width of 1453 characters (ends at byte 4786 instead of 4800).",
+        "All other fields match their defined start/end positions and widths."
+      ]
+    },
+    "usage": {
+      "inputTokens": 3054,
+      "outputTokens": 167
+    },
+    "estimated_cost_usd": null,
+    "latency_ms": 716,
+    "capability": "explain",
+    "provider": "GROQ",
+    "model_id": "openai/gpt-oss-120b"
+  },
+  "generated_matches_correct_fixture": true,
+  "generated_bytes": 9604,
+  "sha256": "4bd159c8b5b421afa6976a7185f7667924385e6dd35c36cc30d1546f625b38e4",
+  "note": "Synthetic values only; output verified against the independent correct.dat. No Oracle database was contacted.",
+  "evidence_backed_recovery": {
+    "sample_id": "char2_int4",
+    "variant": "bad_numeric",
+    "record": 2,
+    "field": "QUANTITY",
+    "original_value": "-X12",
+    "proposed_value": "-012",
+    "evidence": [
+      {
+        "record": 2,
+        "field": "QUANTITY",
+        "value": "-012",
+        "source_type": "CSV",
+        "source_reference": "CSV!3:2",
+        "sheet": "CSV",
+        "source_row": 3,
+        "key_fields": [
+          "CODE"
+        ],
+        "matched_key": [
+          "BB"
+        ]
+      }
+    ],
+    "run": {
+      "result": {
+        "status": "OK",
+        "summary": "Proposed correction for QUANTITY field based on CSV evidence.",
+        "proposals": [
+          {
+            "record": 2,
+            "field_name": "QUANTITY",
+            "original_value": "-X12",
+            "proposed_value": "-012",
+            "evidence": [
+              {
+                "source_reference": "CSV!3:2",
+                "matched_value": "-012"
+              }
+            ],
+            "reason": "Replace invalid character with numeric zero to satisfy INTEGER EXTERNAL datatype.",
+            "confidence_label": "MEDIUM"
+          }
+        ],
+        "mappings": [],
+        "observations": [
+          "QUANTITY field contains non-numeric character 'X' causing INTEGER EXTERNAL format error."
+        ]
+      },
+      "usage": {
+        "inputTokens": 846,
+        "outputTokens": 273
+      },
+      "estimated_cost_usd": null,
+      "latency_ms": 1069,
+      "capability": "recover",
+      "provider": "GROQ",
+      "model_id": "openai/gpt-oss-120b"
+    },
+    "approved_generated_matches_correct_fixture": true,
+    "note": "All source values are synthetic. Source evidence matched by unique CODE; no real financial data shared."
+  }
+}

@@ -1,0 +1,289 @@
+{
+  "id": "fixed_4800",
+  "title": "4,800 bytes \u00b7 FIX records without line endings",
+  "description": "Two exactly 4,800-byte records, stored back to back. No CR or LF separators.",
+  "supported": true,
+  "record_length": 4800,
+  "record_count": 2,
+  "record_format": "fixed",
+  "encoding": "ascii",
+  "line_ending": "none",
+  "keys": [
+    "ITEM_NUMBER"
+  ],
+  "fields": [
+    {
+      "name": "RECORD_TYPE",
+      "start": 1,
+      "end": 2,
+      "width": 2
+    },
+    {
+      "name": "BATCH_NAME",
+      "start": 3,
+      "end": 12,
+      "width": 10
+    },
+    {
+      "name": "ITEM_NUMBER",
+      "start": 13,
+      "end": 18,
+      "width": 6
+    },
+    {
+      "name": "CUSTOMER_NUMBER",
+      "start": 19,
+      "end": 30,
+      "width": 12
+    },
+    {
+      "name": "RECEIPT_NUMBER",
+      "start": 31,
+      "end": 50,
+      "width": 20
+    },
+    {
+      "name": "CURRENCY_CODE",
+      "start": 51,
+      "end": 53,
+      "width": 3
+    },
+    {
+      "name": "REMITTANCE_AMOUNT",
+      "start": 54,
+      "end": 67,
+      "width": 14
+    },
+    {
+      "name": "DEPOSIT_DATE",
+      "start": 68,
+      "end": 75,
+      "width": 8
+    },
+    {
+      "name": "INVOICE_NUMBER1",
+      "start": 76,
+      "end": 95,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED1",
+      "start": 96,
+      "end": 109,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER2",
+      "start": 110,
+      "end": 129,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED2",
+      "start": 130,
+      "end": 143,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER3",
+      "start": 144,
+      "end": 163,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED3",
+      "start": 164,
+      "end": 177,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER4",
+      "start": 178,
+      "end": 197,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED4",
+      "start": 198,
+      "end": 211,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER5",
+      "start": 212,
+      "end": 231,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED5",
+      "start": 232,
+      "end": 245,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER6",
+      "start": 246,
+      "end": 265,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED6",
+      "start": 266,
+      "end": 279,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER7",
+      "start": 280,
+      "end": 299,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED7",
+      "start": 300,
+      "end": 313,
+      "width": 14
+    },
+    {
+      "name": "INVOICE_NUMBER8",
+      "start": 314,
+      "end": 333,
+      "width": 20
+    },
+    {
+      "name": "AMOUNT_APPLIED8",
+      "start": 334,
+      "end": 347,
+      "width": 14
+    },
+    {
+      "name": "ATTRIBUTE1",
+      "start": 348,
+      "end": 547,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE2",
+      "start": 548,
+      "end": 747,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE3",
+      "start": 748,
+      "end": 947,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE4",
+      "start": 948,
+      "end": 1147,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE5",
+      "start": 1148,
+      "end": 1347,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE6",
+      "start": 1348,
+      "end": 1547,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE7",
+      "start": 1548,
+      "end": 1747,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE8",
+      "start": 1748,
+      "end": 1947,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE9",
+      "start": 1948,
+      "end": 2147,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE10",
+      "start": 2148,
+      "end": 2347,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE11",
+      "start": 2348,
+      "end": 2547,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE12",
+      "start": 2548,
+      "end": 2747,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE13",
+      "start": 2748,
+      "end": 2947,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE14",
+      "start": 2948,
+      "end": 3147,
+      "width": 200
+    },
+    {
+      "name": "ATTRIBUTE15",
+      "start": 3148,
+      "end": 3347,
+      "width": 200
+    },
+    {
+      "name": "COMMENTS",
+      "start": 3348,
+      "end": 4800,
+      "width": 1453
+    }
+  ],
+  "variants": [
+    {
+      "id": "correct",
+      "label": "Correct input",
+      "file": "correct.dat",
+      "expected_valid": true,
+      "expected_records_with_findings": 0,
+      "exercise": "Inspect all fields, then generate and compare the untouched output.",
+      "sha256": "e328376039da78c70904b35e143d66643dcad980ff2940164205198a67369576",
+      "record_lengths": [
+        4800,
+        4800
+      ]
+    },
+    {
+      "id": "bad_amount",
+      "label": "Invalid amount in second fixed record",
+      "file": "bad_amount.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "The second record starts at absolute byte 4801. Review the amount field without inserting line endings.",
+      "sha256": "a42914218af7a340d68999aefa1a74d8f5f7984af8872e073d9dde7068f52959",
+      "record_lengths": [
+        4800,
+        4800
+      ]
+    }
+  ],
+  "sources": [
+    "https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html",
+    "https://docs.oracle.com/cd/E18727_01/doc.121/e13510/T447343T454906.htm"
+  ],
+  "scope": "Synthetic custom XX staging schema. Not a copy of ardeft.ctl, arconv.ctl or an EBS certification."
+}

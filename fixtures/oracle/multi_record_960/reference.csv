@@ -1,0 +1,6 @@
+RECORD_TYPE,BATCH_NAME,ITEM_NUMBER,CUSTOMER_NUMBER,RECEIPT_NUMBER,CURRENCY_CODE,REMITTANCE_AMOUNT,DEPOSIT_DATE,COMMENTS
+01,BATCH00001,000001,,,,,,Synthetic 01 record; explicit positions restart each INTO TABLE
+06,BATCH00001,000002,000000123456,RCPT000001,USD,1234.50,20261017,Synthetic 06 record; explicit positions restart each INTO TABLE
+04,BATCH00001,000003,,,,,,Synthetic 04 record; explicit positions restart each INTO TABLE
+06,BATCH00001,000004,000000123456,RCPT000001,USD,1234.50,20261017,Synthetic 06 record; explicit positions restart each INTO TABLE
+09,BATCH00001,000005,,,,,,Synthetic 09 record; explicit positions restart each INTO TABLE

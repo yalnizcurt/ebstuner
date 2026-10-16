@@ -83,7 +83,7 @@ class ProposalView(View):
     id: str
     record: int
     kind: str
-    source: Literal['DETERMINISTIC','SPREADSHEET','BEDROCK']
+    source: Literal['DETERMINISTIC','SPREADSHEET','BEDROCK','GROQ']
     status: Literal['PROPOSED','PENDING_REVIEW','APPROVED','REJECTED','APPLIED','SUPERSEDED']
     record_checksum: str
     candidate_score: float

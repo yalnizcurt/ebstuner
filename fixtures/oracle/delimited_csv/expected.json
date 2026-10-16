@@ -1,0 +1,45 @@
+{
+  "id": "delimited_csv",
+  "title": "Unsupported \u00b7 delimited SQL*Loader fields",
+  "description": "Oracle supports delimited fields; the current editor requires fixed byte positions. Importing this example must show the unsupported declaration.",
+  "supported": false,
+  "record_length": 7,
+  "record_count": 1,
+  "record_format": "stream",
+  "encoding": "ascii",
+  "line_ending": "CRLF",
+  "keys": [],
+  "fields": [
+    {
+      "name": "CODE",
+      "start": 1,
+      "end": 2,
+      "width": 2
+    },
+    {
+      "name": "QUANTITY",
+      "start": 4,
+      "end": 7,
+      "width": 4
+    }
+  ],
+  "variants": [
+    {
+      "id": "correct",
+      "label": "Unsupported reference input",
+      "file": "correct.dat",
+      "expected_valid": false,
+      "expected_records_with_findings": 1,
+      "exercise": "Read the compatibility findings. Validated export must remain blocked.",
+      "sha256": "c51fb31c2eb2dfa3b7630edd1023a97842919d09c7f2ce36bec0ddf6f967e672",
+      "record_lengths": [
+        7
+      ]
+    }
+  ],
+  "sources": [
+    "https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html",
+    "https://docs.oracle.com/cd/E18727_01/doc.121/e13510/T447343T454906.htm"
+  ],
+  "scope": "Synthetic custom XX staging schema. Not a copy of ardeft.ctl, arconv.ctl or an EBS certification."
+}

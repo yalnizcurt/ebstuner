@@ -1,10 +1,11 @@
 'use strict';
 let st=null, pid=null, active='workspace', current=1, pageNumber=1, gridPage=1, grid=null, draftAllowed=false;
 let selectedRows=new Set(), cellBusy=false, repairOffset=0, repairTotal=0;
+let samples=[], aiStatus=null;
 const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dot=s=>String(s??'').replace(/ /g,'·').replace(/\t/g,'→');
-const titles={workspace:'Workspace',schema:'CTL schema explorer',diagnostics:'DAT diagnostics',repairs:'Repair workspace',editor:'Spreadsheet data editor',bytes:'Byte inspector',export:'Generate & export',bedrock:'Bedrock configuration'};
+const titles={workspace:'Workspace',schema:'CTL schema explorer',diagnostics:'DAT diagnostics',repairs:'Repair workspace',editor:'Spreadsheet data editor',bytes:'Byte inspector',export:'Generate & export',ai:'AI connection'};
 function show(message,error=false){const e=$('#notice');e.className='alert toast '+(error?'error':'success');e.textContent=typeof message==='string'?message:JSON.stringify(message)}
 function confirmAction(message){
   return new Promise(resolve=>{const dialog=$('#confirmDialog');$('#confirmMessage').textContent=message;dialog.returnValue='cancel';dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal()});
@@ -18,12 +19,21 @@ async function request(path,options={}){
 const api=path=>`/api/projects/${encodeURIComponent(pid)}${path}`;
 function requireProject(){if(!pid||!st?.loaded)throw Error('Import a CTL and DAT into a project first')}
 async function mutate(path,body,method='POST'){requireProject();st=await request(api(path),{method,body:JSON.stringify({version:st.project.version,...body})});render();if(active==='repairs')await loadProposals();return st}
-function switchPage(name){active=name;$$('.nav').forEach(x=>x.classList.toggle('active',x.dataset.page===name));$$('.section').forEach(x=>x.classList.toggle('active',x.id===name));$('#pageTitle').textContent=titles[name];if(name==='editor'&&st?.loaded)loadGrid().catch(fail);if(name==='repairs'&&st?.loaded)loadProposals().catch(fail);if(name==='bedrock')loadBedrock().catch(fail)}
+function switchPage(name){if(!st?.loaded&&!['workspace','ai'].includes(name)){show('Choose a practice case or import your CTL + DAT to begin.');name='workspace'}active=name;$$('.nav').forEach(x=>x.classList.toggle('active',x.dataset.page===name));$$('.section').forEach(x=>x.classList.toggle('active',x.id===name));$('#pageTitle').textContent=titles[name];if(name==='editor'&&st?.loaded)loadGrid().catch(fail);if(name==='repairs'&&st?.loaded)loadProposals().catch(fail);if(name==='ai')loadAIStatus().catch(fail);window.scrollTo(0,0)}
 async function refresh(n=current){if(!pid)return;const q=new URLSearchParams({record:n,page:pageNumber,page_size:50,search:$('#recordSearch').value,record_type:$('#typeFilter').value,status:$('#statusFilter').value,sort:$('#sortFilter').value});st=await request(api('/state?'+q));current=st.record_num||1;pageNumber=st.pagination?.page||1;render()}
 function render(){
   $('#projectName').textContent=st?.project?.name||'No project selected';
   $('#sessionBadge').textContent=st?.project?`PROJECT VERSION ${st.project.version}`:'DETERMINISTIC ENGINE READY';
-  if(!st?.loaded)return;
+  $$('.nav').forEach(x=>x.disabled=!st?.loaded&&!['workspace','ai'].includes(x.dataset.page));
+  $('#uploadButton').disabled=!!st?.loaded;
+  $('.stats').classList.toggle('hidden',!st?.loaded);
+  renderExercise();
+  if(!st?.loaded){
+    for(const id of ['sBranches','sRecords','sIssues','sHash'])$('#'+id).textContent='—';
+    $('#properties').className='empty';$('#properties').textContent='Import a CTL and DAT to inspect file properties.';
+    for(const id of ['schemaContent','diagnosticCounts','recordList','pageIndex','recordIssues','fieldSummary','repairList','repairIndex','sheetMapping','reconciliation','sheetPreview','gridHead','gridBody','gridIndex','editorValidation','byteMeta','byteCurrent','byteOriginal','byteFields','exportState','history','aiResult'])$('#'+id).replaceChildren();
+    grid=null;if(!['workspace','ai'].includes(active))switchPage('workspace');return;
+  }
   current=st.record_num;const d=st.diagnosis;
   const layout=$('#layoutBranch').value;$('#layoutBranch').innerHTML='<option value="">Matched destinations</option>'+st.schema.branches.map((b,i)=>`<option value="${i}" ${String(i)===layout?'selected':''}>Assume branch ${i+1} · ${esc(b.table)}</option>`).join('');
   $('#sBranches').textContent=d.branch_count;$('#sRecords').textContent=d.record_count;$('#sIssues').textContent=d.records_with_findings;$('#sHash').textContent=d.sha256.slice(0,14)+'…';
@@ -54,7 +64,7 @@ function renderRepairs(){
   const proposals=st.proposals.filter(p=>!$('#pendingOnly').checked||['PENDING_REVIEW','PROPOSED'].includes(p.status));
   $('#repairList').className='';$('#repairList').innerHTML=proposals.length?proposals.map(p=>{
     const pending=['PENDING_REVIEW','PROPOSED'].includes(p.status);
-    return `<article class="panel proposal ${p.source==='BEDROCK'?'ai':''}"><div class="flex"><h3>${pending?`<input type="checkbox" data-proposal="${esc(p.id)}" aria-label="Select proposal for record ${p.record}"> `:''}Record ${p.record} · ${esc(p.kind.replaceAll('_',' '))}${p.rank?' · rank '+p.rank:''}</h3><span class="pill ${p.source==='BEDROCK'?'badge-ai':'neutral'}">${esc(p.source)} · ${esc(p.status)}</span></div><p>${esc(p.reason)}</p><div class="score-bars"><span>Score ${p.candidate_score} / 100</span>${Object.entries(p.score_breakdown||{}).map(([k,v])=>`<span>${esc(k)}: ${v.points.toFixed(1)} / ${(v.weight*100).toFixed(0)}</span>`).join('')}</div>${p.ambiguous?`<div class="issue">Ambiguous: ${p.candidate_count} valid candidates; top-score gap ${Number(p.score_separation).toFixed(2)}. Compare physical changes before approval.</div>`:''}${p.field?`<p><strong>${esc(p.field)}</strong> · bytes ${p.start}–${p.end}</p><div class="two"><div><label>Original value<pre>${esc(dot(p.original_value))}</pre></label></div><label>Proposed value${pending?`<input data-override="${esc(p.id)}" value="${esc(p.proposed_value)}" aria-label="Proposed value for ${esc(p.field)}">`:`<pre>${esc(dot(p.approved_value??p.proposed_value))}</pre>`}</label></div>`:''}<details><summary>Physical changes, evidence & destinations</summary>${p.changes?`<div class="scroller"><table><thead><tr><th>Field</th><th>Bytes</th><th>Before</th><th>After</th></tr></thead><tbody>${p.changes.map(c=>`<tr><td>${esc(c.field)}</td><td>${c.start}–${c.end}</td><td class="mono">${esc(dot(c.original))}</td><td class="mono">${esc(dot(c.proposed))}</td></tr>`).join('')}</tbody></table></div>`:''}<p>Evidence: ${p.evidence?.length?esc(p.evidence.map(e=>`${e.source_reference||e.source_type}: ${e.value??e.matched_value}`).join('; ')):'Structural constraints only; missing business values cannot be inferred.'}</p><p>Destinations after serialization: ${esc((p.destinations||[]).map(d=>d.table).join(', '))}</p>${p.expected_serialized_value?`<pre>${esc(dot(p.expected_serialized_value))}</pre>`:''}<p class="mono">Source record checksum: ${esc(p.record_checksum)}</p></details>${pending?`<div class="btnrow"><button class="primary" data-review="approve" data-id="${esc(p.id)}">Approve & apply</button><button class="secondary" data-review="reject" data-id="${esc(p.id)}">Reject</button><button class="secondary" data-goto-byte="${p.record}">Inspect bytes</button></div>`:''}</article>`;
+    return `<article class="panel proposal ${['BEDROCK','GROQ'].includes(p.source)?'ai':''}"><div class="flex"><h3>${pending?`<input type="checkbox" data-proposal="${esc(p.id)}" aria-label="Select proposal for record ${p.record}"> `:''}Record ${p.record} · ${esc(p.kind.replaceAll('_',' '))}${p.rank?' · rank '+p.rank:''}</h3><span class="pill ${['BEDROCK','GROQ'].includes(p.source)?'badge-ai':'neutral'}">${esc(p.source)} · ${esc(p.status)}</span></div><p>${esc(p.reason)}</p><div class="score-bars"><span>Score ${p.candidate_score} / 100</span>${Object.entries(p.score_breakdown||{}).map(([k,v])=>`<span>${esc(k)}: ${v.points.toFixed(1)} / ${(v.weight*100).toFixed(0)}</span>`).join('')}</div>${p.ambiguous?`<div class="issue">Ambiguous: ${p.candidate_count} valid candidates; top-score gap ${Number(p.score_separation).toFixed(2)}. Compare physical changes before approval.</div>`:''}${p.field?`<p><strong>${esc(p.field)}</strong> · bytes ${p.start}–${p.end}</p><div class="two"><div><label>Original value<pre>${esc(dot(p.original_value))}</pre></label></div><label>Proposed value${pending?`<input data-override="${esc(p.id)}" value="${esc(p.proposed_value)}" aria-label="Proposed value for ${esc(p.field)}">`:`<pre>${esc(dot(p.approved_value??p.proposed_value))}</pre>`}</label></div>`:''}<details><summary>Physical changes, evidence & destinations</summary>${p.changes?`<div class="scroller"><table><thead><tr><th>Field</th><th>Bytes</th><th>Before</th><th>After</th></tr></thead><tbody>${p.changes.map(c=>`<tr><td>${esc(c.field)}</td><td>${c.start}–${c.end}</td><td class="mono">${esc(dot(c.original))}</td><td class="mono">${esc(dot(c.proposed))}</td></tr>`).join('')}</tbody></table></div>`:''}<p>Evidence: ${p.evidence?.length?esc(p.evidence.map(e=>`${e.source_reference||e.source_type}: ${e.value??e.matched_value}`).join('; ')):'Structural constraints only; missing business values cannot be inferred.'}</p><p>Destinations after serialization: ${esc((p.destinations||[]).map(d=>d.table).join(', '))}</p>${p.expected_serialized_value?`<pre>${esc(dot(p.expected_serialized_value))}</pre>`:''}<p class="mono">Source record checksum: ${esc(p.record_checksum)}</p></details>${pending?`<div class="btnrow"><button class="primary" data-review="approve" data-id="${esc(p.id)}">Approve & apply</button><button class="secondary" data-review="reject" data-id="${esc(p.id)}">Reject</button><button class="secondary" data-goto-byte="${p.record}">Inspect bytes</button></div>`:''}</article>`;
   }).join(''):'<div class="empty">No pending candidates. Unsupported or evidence-free damage may require manual investigation.</div>';
 }
 function renderSheet(){
@@ -75,8 +85,8 @@ async function reconcileSheet(){
   const mapping={},keys=[];$$('[data-map]').forEach(e=>{if(e.value){mapping[e.dataset.map]=e.value;if($$('[data-key]').find(k=>k.dataset.key===e.dataset.map)?.checked)keys.push(e.value)}});
   await mutate('/map-spreadsheet',{sheet:$('#sheetSelect').value,role:$('#sheetRole').value,mapping,keys});show('Reconciliation complete. Existing DAT values are preserved pending review.');
 }
-function renderAI(){const run=st.ai_runs.at(-1);$('#aiResult').innerHTML=run?`<div class="panel"><span class="pill badge-ai">${esc(run.capability)} · ${esc(run.result.status)}</span><p>${esc(run.result.summary)}</p>${run.result.observations.map(x=>`<div class="notice">${esc(x)}</div>`).join('')}${run.result.mappings.map(m=>`<div class="issue">${esc(m.sheet)} / ${esc(m.header)} → ${esc(m.field_name)}: ${esc(m.reason)} <button class="secondary" data-ai-map="${esc(m.header)}" data-ai-field="${esc(m.field_name)}" data-ai-sheet="${esc(m.sheet)}">Use mapping</button></div>`).join('')}<p class="small">Tokens: ${esc(run.usage.inputTokens??'?')} input / ${esc(run.usage.outputTokens??'?')} output · ${run.latency_ms} ms · ${run.estimated_cost_usd===null?'Cost unpriced':`Estimated $${run.estimated_cost_usd.toFixed(6)}`}</p></div>`:''}
-async function runAI(){requireProject();const capability=$('#aiCapability').value;const share_values=$('#shareValues').checked;if(share_values&&!await confirmAction(`Share fields and matching evidence for record ${current} with your configured Bedrock model?`))return;$('#runAI').disabled=true;try{const result=await request(api('/ai/recover'),{method:'POST',body:JSON.stringify({version:st.project.version,capability,record:current,share_values})});st=result.state;render();show(result.skipped?result.reason:'Bedrock review saved. Any data modifications still require your approval.')}finally{$('#runAI').disabled=false}}
+function renderAI(){const run=st.ai_runs.at(-1);$('#aiResult').innerHTML=run?`<div class="panel"><span class="pill badge-ai">${esc(run.provider||aiStatus?.provider||'AI')} · ${esc(run.capability)} · ${esc(run.result.status)}</span><p>${esc(run.result.summary)}</p>${run.result.observations.map(x=>`<div class="notice">${esc(x)}</div>`).join('')}${run.result.mappings.map(m=>`<div class="issue">${esc(m.sheet)} / ${esc(m.header)} → ${esc(m.field_name)}: ${esc(m.reason)} <button class="secondary" data-ai-map="${esc(m.header)}" data-ai-field="${esc(m.field_name)}" data-ai-sheet="${esc(m.sheet)}">Use mapping</button></div>`).join('')}<p class="small">Tokens: ${esc(run.usage.inputTokens??'?')} input / ${esc(run.usage.outputTokens??'?')} output · ${run.latency_ms} ms · ${run.estimated_cost_usd===null?'Cost unpriced':`Estimated $${run.estimated_cost_usd.toFixed(6)}`}</p></div>`:''}
+async function runAI(){requireProject();const capability=$('#aiCapability').value;const share_values=$('#shareValues').checked;if(share_values&&!await confirmAction(`Share fields and matching evidence for record ${current} with ${aiStatus?.provider||'your AI provider'} (${aiStatus?.model_id||'configured model'})?`))return;$('#runAI').disabled=true;try{const result=await request(api('/ai/recover'),{method:'POST',body:JSON.stringify({version:st.project.version,capability,record:current,share_values})});st=result.state;render();show(result.skipped?result.reason:'AI review saved. Any data modifications still require your approval.')}finally{$('#runAI').disabled=aiStatus?!aiStatus.ai_available:false}}
 async function review(ids,action){
   if(!ids.length)throw Error('Select one or more proposals first');
   const overrides={};ids.forEach(id=>{const input=$$('[data-override]').find(e=>e.dataset.override===id);if(input)overrides[id]=input.value});
@@ -112,13 +122,68 @@ function renderBytes(){
   $('#byteFields').innerHTML='<p>'+r.fields.filter(f=>f.start).map(f=>`<span class="pill ${f.modified?'bad':'neutral'}">${esc(f.name)} ${f.start}–${f.end}</span>`).join(' ')+'</p>';
 }
 function renderExport(){const d=st.diagnosis;$('#exportState').innerHTML=`<div class="alert ${['structurally_validated','validated_with_warnings'].includes(d.export_status)?'success':''}">${esc(d.export_status.replaceAll('_',' '))} · ${d.records_with_findings} record(s) with findings</div><p><strong>Current SHA-256:</strong> <code>${esc(d.sha256)}</code></p><p>${esc(d.validation_scope)}</p><p>${st.generated_checksum===d.sha256?'Current version has been generated and re-parsed.':'Generate the current version before downloading.'}</p>`;$('#downloadDat').disabled=st.generated_checksum!==d.sha256;$('#draftOption').classList.toggle('hidden',!draftAllowed);$('#history').innerHTML=st.history.slice().reverse().map(h=>`<div class="report-line small"><strong>${esc(h.action)}</strong> · ${esc(h.timestamp)}${h.record?' · record '+h.record:''}${h.records?' · records '+esc((Array.isArray(h.records)?h.records.join(', '):String(h.records))):''}${h.after_checksum?'<div class="mono">'+esc(h.after_checksum)+'</div>':''}</div>`).join('')||'<p>No changes applied.</p>'}
-async function loadBedrock(){const s=await request('/api/ai/bedrock/status');$('#bedrockStatus').innerHTML=`<div class="alert ${s.connection_status==='connected'?'success':''}">${esc(s.connection_status.replaceAll('_',' '))} · AI ${s.ai_available?'available':'unavailable'}</div><div class="report-line">AWS Region: <strong>${esc(s.region||'Not configured')}</strong></div><div class="report-line">Model / inference profile: <strong>${esc(s.model_id||'Not configured')}</strong></div><div class="report-line">Model access: ${s.model_accessible===true?'Verified':s.model_accessible===false?'Failed':'Not tested'}</div><div class="report-line">Last successful test: ${esc(s.last_successful_test||'None')}</div><div class="report-line">Credential source: ${esc(s.credential_mode||'Backend')}</div>${s.error?`<div class="issue">${esc(s.error)}</div>`:''}<p>Deterministic processing and manual editing remain available when AI is unavailable.</p>`}
+async function loadAIStatus(){
+  const s=await request('/api/ai/status');aiStatus=s;renderAIStatus();return s;
+}
+function renderAIStatus(){
+  const s=aiStatus;if(!s)return;
+  const state=String(s.connection_status||'not_configured').replaceAll('_',' ');
+  const provider=s.provider==='AmazonBedrockProvider'?'Amazon Bedrock':s.provider||'AI';
+  $('#aiStatus').innerHTML=`<div class="alert ${s.connection_status==='connected'?'success':''}">${esc(state)} · AI ${s.ai_available?'available':'unavailable'}</div><div class="report-line">Provider: <strong>${esc(provider)}</strong></div><div class="report-line">Model: <strong>${esc(s.model_id||'Not configured')}</strong></div>${s.region?`<div class="report-line">AWS Region: ${esc(s.region)}</div>`:''}<div class="report-line">Model access: ${s.model_accessible===true?'Verified by a live test':s.model_accessible===false?'Test failed':'Not tested'}</div><div class="report-line">Last successful test: ${esc(s.last_successful_test||'None')}</div>${s.error?`<div class="issue">${esc(s.error)}</div>`:''}`;
+  $('#aiReviewStatus').textContent=`${provider} · ${s.model_id||'No model configured'} · ${state}. ${s.ai_available?'AI output is reviewed before any correction.':'Check AI connection settings; you can still inspect, edit and export supported files.'}`;
+  $('#runAI').disabled=!s.ai_available;
+}
+function selectedSample(){return samples.find(s=>s.id===$('#sampleSelect').value)}
+function sampleVariant(sample){return sample?.variants.find(v=>v.id===$('#sampleVariant').value)}
+function expectedLabel(sample,variant){return !sample.supported?'Compatibility example · validated export blocked':variant.expected_valid?'Expected: no findings':`Expected: ${variant.expected_records_with_findings??'one or more'} record(s) with findings`}
+async function loadSamples(){
+  const manifest=await request('/api/samples');samples=manifest.samples||[];
+  $('#sampleCount').textContent=`${samples.length} layouts · up to 4,800 bytes`;
+  $('#sampleSelect').innerHTML=[true,false].map(supported=>`<optgroup label="${supported?'Supported practice layouts':'Unsupported declarations · inspect limitations'}">${samples.filter(s=>s.supported===supported).map(s=>`<option value="${esc(s.id)}">${esc(s.title)}</option>`).join('')}</optgroup>`).join('');
+  if(samples.some(s=>s.id==='receipt_4800'))$('#sampleSelect').value='receipt_4800';
+  $('#sampleSelect').disabled=!samples.length;$('#loadSample').disabled=!samples.length;$('#downloadSample').disabled=!samples.length;
+  updateSampleVariants();renderExercise();
+}
+function updateSampleVariants(){
+  const s=selectedSample();$('#sampleVariant').innerHTML=(s?.variants||[]).map(v=>`<option value="${esc(v.id)}">${esc(v.label)}</option>`).join('');
+  if(s?.variants.some(v=>v.id==='missing_spaces'))$('#sampleVariant').value='missing_spaces';
+  $('#sampleVariant').disabled=!s;renderSampleDescription();
+}
+function renderSampleDescription(){
+  const s=selectedSample(),v=sampleVariant(s);if(!s||!v)return;
+  $('#sampleDescription').innerHTML=`<div class="flex"><span class="pill ${s.supported?'good':'bad'}">${s.supported?'Supported in Studio':'Oracle syntax outside Studio support'}</span><span class="small">${s.record_count} records · ${s.record_length.toLocaleString()} bytes per correct record · ${esc(s.record_format)} · ${esc(s.line_ending)}</span></div><p>${esc(s.description)}</p><div class="notice"><strong>${esc(expectedLabel(s,v))}</strong><p>${esc(v.exercise)}</p>${s.keys.length?`<span>Reconciliation key: <code>${esc(s.keys.join(' + '))}</code></span>`:''}</div>`;
+}
+function renderExercise(){
+  const e=$('#activeExercise'),loaded=st?.sample;e.classList.toggle('hidden',!loaded);if(!loaded){e.replaceChildren();return}
+  const sample=samples.find(s=>s.id===loaded.id)||loaded;
+  const variant=sample.variants?.find(v=>v.id===loaded.variant);
+  e.innerHTML=`<div class="flex"><div><div class="eyebrow">Loaded practice case</div><h2>${esc(loaded.title||sample.title)}</h2></div><span class="pill ${loaded.supported?'good':'bad'}">${loaded.supported?'Supported layout':'Compatibility limit'}</span></div><p><strong>${esc(variant?.label||String(loaded.variant||''))}</strong> · ${esc(loaded.exercise||variant?.exercise||loaded.description||'')}</p>${loaded.keys?.length?`<p>For reference evidence, use <code>${esc(loaded.keys.join(' + '))}</code> as the reconciliation key. Review proposed values before approval.</p>`:''}<div class="btnrow"><button class="secondary compact" data-page-link="diagnostics">Inspect findings</button><button class="secondary compact" data-page-link="repairs">Review corrections</button><button class="secondary compact" data-page-link="export">Generate output</button></div>`;
+}
+function resetProjectView(){
+  current=1;pageNumber=1;gridPage=1;grid=null;repairOffset=0;repairTotal=0;selectedRows.clear();
+  for(const id of ['weights','gridHead','gridBody'])$('#'+id).replaceChildren();
+  for(const id of ['recordSearch','typeFilter','statusFilter','gridType','columnSearch','layoutBranch'])$('#'+id).value='';
+  $('#sortFilter').value='record';$('#draftExport').checked=false;$('#shareValues').checked=false;
+}
+async function loadSample(){
+  const sample=selectedSample(),variant=sampleVariant(sample);if(!sample||!variant)throw Error('Choose a practice case first');
+  const button=$('#loadSample');button.disabled=true;button.textContent='Creating practice project…';$('#sampleSelect').disabled=true;$('#sampleVariant').disabled=true;
+  try{
+    const created=await request('/api/projects',{method:'POST',body:JSON.stringify({name:`${sample.title} · ${variant.label}`.slice(0,120)})});
+    pid=created.project.id;st=created;resetProjectView();render();
+    st=await request(api('/sample'),{method:'POST',body:JSON.stringify({version:st.project.version,sample_id:sample.id,variant:variant.id})});
+    render();await listProjects();switchPage('diagnostics');show(`Practice case loaded. ${expectedLabel(sample,variant)}. Follow the exercise above.`);
+  }finally{button.disabled=false;button.textContent='Load practice case →';$('#sampleSelect').disabled=false;$('#sampleVariant').disabled=false;await listProjects().catch(()=>{})}
+}
 async function listProjects(){const projects=await request('/api/projects');$('#projectList').innerHTML=projects.length?projects.map(p=>`<div class="project-item"><button class="secondary" data-open-project="${esc(p.id)}">${esc(p.name)}<div class="small">Version ${p.version}</div></button><button class="danger compact" data-delete-project="${esc(p.id)}" aria-label="Delete ${esc(p.name)}">Delete</button></div>`).join(''):'<p>Create your first project to begin.</p>'}
-async function openProject(id){pid=id;current=1;pageNumber=1;gridPage=1;selectedRows.clear();$('#weights').innerHTML='';await refresh();$('#uploadButton').disabled=st.loaded;await listProjects();if(!st.loaded)show('Project created. Import its CTL and DAT files.')}
+async function openProject(id){pid=id;resetProjectView();await refresh();await listProjects();if(!st.loaded)show('Project created. Import its CTL and DAT files or choose a practice case.');if(active==='editor'&&st.loaded)await loadGrid();if(active==='repairs'&&st.loaded)await loadProposals()}
 function download(path){requireProject();window.location.assign(api(path))}
-async function initialize(){const s=await request('/api/session');draftAllowed=s.draft_export_enabled;if(!s.authenticated){if(s.login_required){$('#login').classList.remove('hidden');$('#application').classList.add('hidden');return}await request('/api/session',{method:'POST',body:'{}'})}$('#login').classList.add('hidden');$('#application').classList.remove('hidden');await listProjects()}
+async function initialize(){const s=await request('/api/session');draftAllowed=s.draft_export_enabled;if(!s.authenticated){if(s.login_required){$('#login').classList.remove('hidden');$('#application').classList.add('hidden');return}await request('/api/session',{method:'POST',body:'{}'})}$('#login').classList.add('hidden');$('#application').classList.remove('hidden');render();const results=await Promise.allSettled([listProjects(),loadSamples(),loadAIStatus()]);results.filter(r=>r.status==='rejected').forEach(r=>fail(r.reason))}
 
 $$('.nav').forEach(e=>e.onclick=()=>switchPage(e.dataset.page));
+$('#sampleSelect').onchange=updateSampleVariants;$('#sampleVariant').onchange=renderSampleDescription;
+$('#sampleForm').onsubmit=e=>{e.preventDefault();loadSample().catch(fail)};
+$('#downloadSample').onclick=()=>{const s=selectedSample();if(s)window.location.assign(`/api/samples/${encodeURIComponent(s.id)}/download`)};
 $('#loginForm').onsubmit=async e=>{e.preventDefault();try{await request('/api/session',{method:'POST',body:JSON.stringify({access_token:$('#accessToken').value})});$('#accessToken').value='';await initialize()}catch(e){fail(e)}};
 $('#createForm').onsubmit=async e=>{e.preventDefault();try{const p=await request('/api/projects',{method:'POST',body:JSON.stringify({name:$('#newProject').value})});await openProject(p.project.id)}catch(e){fail(e)}};
 $('#recordFormat').onchange=()=>{$('#recordLength').disabled=$('#recordFormat').value!=='fixed';$('#recordLength').required=!$('#recordLength').disabled};
@@ -143,8 +208,9 @@ $('#hexView').onchange=()=>st&&renderBytes();$('#inspectByte').onclick=()=>refre
 $('#revalidate').onclick=async()=>{try{requireProject();const r=await request(api('/validate'),{method:'POST'});show(`${r.export_status.replaceAll('_',' ')} · byte round-trip ${r.round_trip_identical?'identical':'failed'}`);await refresh()}catch(e){fail(e)}};
 $('#generate').onclick=async()=>{try{requireProject();const r=await request(api('/generate'),{method:'POST',body:JSON.stringify({version:st.project.version,draft:$('#draftExport').checked})});st=r.state;render();show('DAT generated and re-parsed. The current output is ready to download.')}catch(e){fail(e)}};
 $('#downloadDat').onclick=()=>{try{download('/download')}catch(e){fail(e)}};$('#downloadOriginal').onclick=()=>{try{download('/download?original=true')}catch(e){fail(e)}};$('#downloadReport').onclick=()=>{try{download('/report')}catch(e){fail(e)}};$('#downloadAudit').onclick=()=>{try{download('/audit')}catch(e){fail(e)}};
-$('#testBedrock').onclick=async()=>{const b=$('#testBedrock');b.disabled=true;b.textContent='Testing connection…';try{await request('/api/ai/bedrock/test',{method:'POST'});await loadBedrock()}catch(e){fail(e)}finally{b.disabled=false;b.textContent='Test Bedrock connection'}};
+$('#testAI').onclick=async()=>{const b=$('#testAI');b.disabled=true;b.textContent='Testing connection…';try{await request('/api/ai/test',{method:'POST'});await loadAIStatus();show('Connection test finished. Review the model access result below.')}catch(e){fail(e);await loadAIStatus().catch(()=>{})}finally{b.disabled=false;b.textContent='Test AI connection'}};
 document.addEventListener('click',async e=>{const el=e.target.closest('button,[data-select-record]');if(!el)return;try{
+  if(el.dataset.pageLink)switchPage(el.dataset.pageLink);
   if(el.dataset.openProject)await openProject(el.dataset.openProject);
   if(el.dataset.deleteProject&&await confirmAction('Permanently delete this local project, including original files and history?')){await request(`/api/projects/${encodeURIComponent(el.dataset.deleteProject)}`,{method:'DELETE'});if(pid===el.dataset.deleteProject){pid=null;st=null;location.reload()}await listProjects()}
   if(el.dataset.selectRecord)await refresh(Number(el.dataset.selectRecord));

@@ -2,10 +2,13 @@
 
 All application routes use `/api`. `POST /api/session` establishes a seven-day HttpOnly, SameSite=Strict owner session. Its JSON body is `{ "access_token": "…" }` when the backend access gate is configured, otherwise `{}`. `GET /api/session` reports whether sign-in is required. Cookies authorize project ownership; project IDs alone do not. Every write requires `X-Studio-Request: 1` and a permitted Origin. Production cookies also require HTTPS. An authenticated OpenAPI document is available at `GET /api/openapi.json`.
 
-Project/record/diagnostic/proposal responses use Pydantic contracts in `models.py`, including typed statuses, byte fields, score features and pagination payloads. Write bodies are Pydantic models with unknown properties forbidden. Project mutations require `version`, obtained from the latest `project.version`. A stale version returns 409 with `STALE_VERSION`; refresh and review before retrying. Validation errors return 422, missing/foreign projects 404, unauthenticated requests 401, forbidden origins 403, limits 413/429. Bedrock failures return a sanitized capability error; credentials are never returned. Responses include a request correlation ID and no-store headers.
+Project/record/diagnostic/proposal responses use Pydantic contracts in `models.py`, including typed statuses, byte fields, score features and pagination payloads. Write bodies are Pydantic models with unknown properties forbidden. Project mutations require `version`, obtained from the latest `project.version`. A stale version returns 409 with `STALE_VERSION`; refresh and review before retrying. Validation errors return 422, missing/foreign projects 404, unauthenticated requests 401, forbidden origins 403, limits 413/429. Provider failures return a sanitized capability error; credentials are never returned. Responses include a request correlation ID and no-store headers.
 
 | Method | Route | Contract |
 |---|---|---|
+| GET | `/samples` | Synthetic Oracle sample manifest; includes variants, expected findings, physical lengths and checksums |
+| GET | `/samples/{sample_id}/download` | ZIP containing the selected sample CTL, DAT variants and reference CSV |
+| POST | `/projects/{id}/sample` | `{version, sample_id, variant}`; load a built-in sample into a fresh owner project |
 | POST | `/projects` | `{name}` → empty owner project, version 1 |
 | GET | `/projects` | Owner projects only |
 | DELETE | `/projects/{id}` | Delete the authorized project |
@@ -26,9 +29,10 @@ Project/record/diagnostic/proposal responses use Pydantic contracts in `models.p
 | POST | `/projects/{id}/repairs/{repair_id}/approve` | `{version}`; explicit single-proposal approval |
 | POST | `/projects/{id}/repairs/{repair_id}/reject` | `{version}`; reject pending proposal |
 | POST | `/projects/{id}/history/{undo,redo,reset}` | `{version}`; reset is itself undoable |
-| POST | `/projects/{id}/ai/recover` | `{version, capability:schema/mapping/investigate/recover/explain, record:n, share_values:false}`; at most one Bedrock inference step, returns persisted review/state or deterministic skip reason |
-| GET | `/ai/bedrock/status` | Safe connection/configuration metadata |
-| POST | `/ai/bedrock/test` | Synthetic Converse test of configured model |
+| POST | `/projects/{id}/ai/recover` | `{version, capability:schema/mapping/investigate/recover/explain, record:n, share_values:false}`; at most one inference step through the selected provider, returns persisted review/state or deterministic skip reason |
+| GET | `/ai/status` | Safe selected-provider/model connection metadata |
+| POST | `/ai/test` | Synthetic structured connection test of the selected provider/model |
+| GET / POST | `/ai/bedrock/status`, `/ai/bedrock/test` | Compatibility aliases for generic status/test; follow `LLM_PROVIDER` even when Groq is selected |
 | POST | `/projects/{id}/validate` | Fresh re-parse and approval/source round-trip comparison |
 | POST | `/projects/{id}/generate` | `{version, draft:false}`; validates and records output checksum; draft requires server policy and explicit request |
 | GET | `/projects/{id}/download` | Generated current DAT only; checksum/status headers |

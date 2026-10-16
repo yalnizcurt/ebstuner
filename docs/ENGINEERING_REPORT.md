@@ -1,4 +1,6 @@
-# Final engineering report — 15 October 2026
+# Historical initial engineering report — 15 October 2026
+
+This report records the initial Bedrock implementation and its verification on 15 October. Its test counts, timings, provider-only statements and environment observations are historical. The 17 October update selects Groq `openai/gpt-oss-120b` by default, retains Bedrock as an explicit alternative, reads backend `.env` settings and adds the synthetic Oracle sample library. A live Groq connection test has succeeded. See the current [README](../README.md), [Groq configuration](GROQ.md) and [Oracle examples](ORACLE_EXAMPLES.md); the original evaluation numbers below do not measure this update.
 
 ## Delivery status
 
@@ -29,14 +31,14 @@ This is **not a claim that every acceptance criterion is complete**: real Bedroc
 - `compiler.py`: tokenized IR compiler and supported condition grammar/evaluator.
 - `reconstruction.py`: hard constraints, bounded reconstruction, banded distance and configurable scoring.
 - `spreadsheets.py`: XLSX/CSV import, mapping, reconciliation and field specification comparison.
-- `bedrock.py`: only LLM provider, strict schemas, capability prompts, native signing, rotation, connection and error handling.
+- `bedrock.py`: initial LLM provider, strict schemas, capability prompts, native signing, rotation, connection and error handling.
 - `projects.py`: persistent state, review/approval/evidence enforcement, undo/redo, version/checksum guards and export comparisons.
 - `models.py`: typed public state, record, diagnostics and proposal response contracts.
 - `web.py`: authenticated project API, upload/security boundaries, pagination and all workflow routes.
 - `index.html`, `static/app.js`, `static/style.css`: integrated enterprise workstation; actual connected actions and an in-page confirmation dialog.
 - `evaluate.py`, `tests/`, `fixtures/`, dependencies/lock, Docker/Compose, `.env.example`, README and documentation.
 
-The supplied directory is not a Git checkout; changes were delivered directly in the shared repository directory. No customer source file was rewritten or external deployment performed.
+At the start of the initial implementation, the supplied directory was not a Git checkout; changes were delivered directly in the shared directory. The project was subsequently pushed to GitHub. No customer source file was rewritten or external deployment performed.
 
 ## Automated verification
 

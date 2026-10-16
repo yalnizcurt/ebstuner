@@ -13,7 +13,7 @@
 | Absolute byte-range predicates | Fully supported | Compare original bytes without trimming |
 | POSITION(start:end), POSITION(start), POSITION(*), POSITION(*+n) | Fully supported with known lengths | Inclusive byte positions; relative cursor within a layout; CHAR(n) and external numeric lengths supported |
 | Relative first physical field across INTO TABLE branches | Partially supported | Layout metadata shown; runtime cursor dependency flagged |
-| CHAR, INTEGER EXTERNAL, DECIMAL EXTERNAL | Fully supported for stated physical lengths | Strict byte widths; no numeric rounding; signed decimal text retained |
+| CHAR, INTEGER EXTERNAL, DECIMAL EXTERNAL, FLOAT EXTERNAL | Supported physical fixed-width subset | Strict byte widths; signed decimal/scientific text retained without rounding; Studio adds format diagnostics |
 | DATE masks RRMMDD, YYMMDD, MMDDRR, MMDDYY, YYYYMMDD, YYYY-MM-DD, DD-MON-YYYY, DDMMYYYY, MM/DD/YYYY | Fully supported for shape/calendar validation | Actual invalid dates rejected. RR/YY century interpretation and NLS language/business semantics are not certified |
 | FILLER / BOUNDFILLER | Fully supported physically | Bytes and datatype validated, no destination-column binding claimed |
 | CONSTANT | Fully supported as metadata | Consumes no physical bytes; shown read-only |
@@ -30,6 +30,12 @@
 | Binary INTEGER/FLOAT, packed decimal, LOB/SDF, generated SEQUENCE/RECNUM, OPTIONS including SKIP | Unsupported/partial metadata | Explicit diagnostic or parse rejection; validated export blocked |
 | OR/NOT/relational operators in conditions; arbitrary SQL conditions | Unsupported | Unevaluable, never assumed true |
 | Overlapping physical fields within one branch | Partially supported | Diagnostic; validated export blocked. Identical spans across separate matching destinations remain inspectable |
+
+## Numeric checks and sample scope
+
+Studio applies declared-format checks to external numeric fields as an additional advisory rule. Oracle database conversion, target column types and NLS settings can accept or reject different text; the checker does not reproduce that execution environment. Readable `INTEGER EXTERNAL(4)` and binary `INTEGER(4)` are different declarations. See [the syntax and examples guide](ORACLE_EXAMPLES.md) and the [official SQL*Loader reference](https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html).
+
+The bundled library has 11 synthetic custom staging layouts / 26 variants, including 4,800-byte stream and fixed records. These are exercises, not Oracle-delivered formats or a claimed Oracle record-size limit. Exact generated lengths and expected outcomes are in `fixtures/oracle/manifest.json`.
 
 ## Processing and reconstruction limits
 

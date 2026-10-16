@@ -1,8 +1,8 @@
 # Amazon Bedrock configuration and verification
 
-Only `AmazonBedrockProvider` creates an LLM client. It uses Boto3's Bedrock Runtime `Converse` operation and native bearer authentication. No direct vendor SDK/API, alternative provider, local runtime, external tool execution or fallback routing is implemented.
+`LLM_PROVIDER=bedrock` explicitly selects `AmazonBedrockProvider`. The default provider is now Groq; see [Groq setup](GROQ.md). The Bedrock adapter uses Boto3's Bedrock Runtime `Converse` operation and native bearer authentication. There is no automatic fallback between providers, external tool execution or local model runtime.
 
-Set backend environment variables `AWS_BEARER_TOKEN_BEDROCK`, `AWS_REGION` and `BEDROCK_MODEL_ID`. The model may be a model identifier or inference-profile identifier/ARN. Select one actually enabled for your account and Region; the application intentionally supplies no default model. The provider fixes its endpoint to the configured AWS Region's official Bedrock Runtime HTTPS host and ignores configured endpoint overrides.
+Set `LLM_PROVIDER=bedrock` and backend environment variables `AWS_BEARER_TOKEN_BEDROCK`, `AWS_REGION` and `BEDROCK_MODEL_ID`. The model may be a model identifier or inference-profile identifier/ARN. Select one actually enabled for your account and Region; the application intentionally supplies no default model. The provider fixes its endpoint to the configured AWS Region's official Bedrock Runtime HTTPS host and ignores configured endpoint overrides.
 
 The SDK token resolver is isolated per client, using the native scoped environment-token provider. Managed-file token rotation therefore does not mutate process-wide environment variables or reuse an expired cached client. Automated testing verified a synthetic token produces the native `Authorization: Bearer …` signing path. Boto3 1.43.114 was installed for verification; runtime configuration requires at least 1.42. The installed SDK exposes both `outputConfig` and strict tool specifications.
 
@@ -12,7 +12,7 @@ These choices follow AWS's [API-key documentation](https://docs.aws.amazon.com/b
 
 The authenticated status route returns region, model, enabled/configured status, credential mode, accessibility from the last test, last successful test time and a sanitized error. It never returns the key or a token fingerprint. Region/model/key changes invalidate cached accessibility. Testing makes a small synthetic structured Converse request; it is the effective model-access check. Model lists or guessed model IDs are not used to claim accessibility.
 
-No real backend token, Region or model was configured during this implementation. The live test was skipped. Native signing and mocked response/error tests passed; they do **not** establish AWS authentication, regional entitlement or live model compatibility. Configure your environment and run the UI test or `RUN_LIVE_BEDROCK=1 .venv/bin/python -m pytest -q tests/test_bedrock.py::test_live_bedrock_connection` to verify these externally controlled prerequisites.
+No real Bedrock backend token, Region or model was verified during the initial implementation or the Groq update. The live test was skipped. Native signing and mocked response/error tests passed; they do **not** establish AWS authentication, regional entitlement or live model compatibility. Configure your environment and run the UI test or `RUN_LIVE_BEDROCK=1 .venv/bin/python -m pytest -q tests/test_bedrock.py::test_live_bedrock_connection` to verify these externally controlled prerequisites.
 
 ## Credentials and rotation
 

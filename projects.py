@@ -298,7 +298,7 @@ def accept_ai_result(p, run, capability, record, share_values):
             if diag['issues'] or diag['branches'] != old_diag['branches']: raise ValueError()
         except ValueError: raise AIError('CONSTRAINT_VIOLATION', 'AI proposal violates field constraints or changes routing') from None
         score, breakdown = score_candidate({'preservation': 0., 'datatype': 1., 'routing': 1., 'spreadsheet': 1., 'edit_cost': 0., 'cross_record': 0.}, p['weights'])
-        pending.append({'id': secrets.token_hex(12), 'record': record, 'kind': 'semantic_recovery', 'source': 'BEDROCK',
+        pending.append({'id': secrets.token_hex(12), 'record': record, 'kind': 'semantic_recovery', 'source': run.get('provider', 'BEDROCK'),
                         'field': f.name, 'start': f.start, 'end': f.end, 'original_value': old, 'proposed_value': proposal['proposed_value'],
                         'evidence': allowed, 'reason': proposal['reason'], 'confidence_label': proposal['confidence_label'],
                         'requires_approval': True, 'status': 'PENDING_REVIEW', 'candidate_score': score, 'score_breakdown': breakdown,
@@ -306,7 +306,7 @@ def accept_ai_result(p, run, capability, record, share_values):
                         'expected_serialized_value': proposal['proposed_value'].ljust(f.width), 'destinations': diag['branches']})
     p['proposals'].extend(pending)
     p['ai_runs'].append({**run, 'timestamp': now(), 'record': record, 'data_version': p['data_version']})
-    event(p, 'Bedrock review completed', capability=capability, record=record, proposals=len(pending), usage=run['usage'], estimated_cost_usd=run['estimated_cost_usd'])
+    event(p, 'AI review completed', provider=run.get('provider', 'BEDROCK'), capability=capability, record=record, proposals=len(pending), usage=run['usage'], estimated_cost_usd=run['estimated_cost_usd'])
 
 
 def verify_generation(p):

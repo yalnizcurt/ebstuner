@@ -1,12 +1,14 @@
 """FastAPI workstation. Serve locally or behind an authenticated TLS proxy."""
 from __future__ import annotations
 import hmac
+import io
 import json
 import logging
 import os
 import secrets
 import threading
 import time
+import zipfile
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -25,14 +27,16 @@ from reconstruction import score_candidate, DEFAULT_WEIGHTS
 from projects import (Repository, Conflict, now, checksum, encode, decode, options, data_of, lines_of, event,
                       check_version, commit_bytes, undo_redo, analyze, reconcile_project, apply_proposals,
                       record_detail, ai_context, accept_ai_result, invalidate_proposals, verify_generation, supplement_diagnostics)
-from bedrock import AmazonBedrockProvider, AIError, CAPABILITIES
+from bedrock import AIError, CAPABILITIES
+from ai import load_environment, configured_provider
 from models import ProjectState, RecordDetail, RecordPage, ProposalPage, DiagnosisView
 
 ROOT = Path(__file__).parent
+load_environment(ROOT / '.env')
 MAX_FILE = 12_000_000
 MAX_BODY = 30_000_000
 repository = Repository()
-provider = AmazonBedrockProvider()
+provider = configured_provider()
 rate_lock = threading.Lock()
 # shortcut: process-local quotas, use shared quota storage before adding API workers.
 rates = defaultdict(deque)
@@ -169,11 +173,58 @@ def build_state(p, record_num=1, page=1, page_size=50, search='', record_type=''
             'reconciliation': rec, 'proposals': p['proposals'][-250:], 'history': p['history'][-100:],
             'proposal_count': len(p['proposals']), 'ai_runs': p['ai_runs'][-5:], 'undo_count': len(p['undo']), 'redo_count': len(p['redo']),
             'original_checksum': checksum(decode(p['original'])), 'modified': p['data'] != p['original'], 'weights': p['weights'],
-            'generated_checksum': p['generated_checksum']}
+            'generated_checksum': p['generated_checksum'], 'sample': p.get('sample')}
 
 
 class ProjectCreate(Input): name: str = Field(min_length=1, max_length=120)
 class Versioned(Input): version: int = Field(ge=1)
+
+
+@lru_cache(maxsize=1)
+def sample_catalog():
+    return json.loads((ROOT / 'fixtures' / 'oracle' / 'manifest.json').read_text())
+
+
+def find_sample(identifier):
+    item = next((x for x in sample_catalog()['samples'] if x['id'] == identifier), None)
+    if item is None: raise HTTPException(404, 'Sample not found')
+    return item
+
+
+@app.get('/api/samples')
+def samples(): return sample_catalog()
+
+
+@app.get('/api/samples/{sample_id}/download')
+def sample_download(sample_id: str):
+    item = find_sample(sample_id); folder = ROOT / 'fixtures' / 'oracle' / item['id']
+    files = ['layout.ctl', 'reference.csv', 'expected.json', *[v['file'] for v in item['variants']]]
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in files: archive.writestr(item['id'] + '/' + name, (folder / name).read_bytes())
+    return Response(data.getvalue(), media_type='application/zip', headers={'Content-Disposition': f'attachment; filename="{item["id"]}.zip"'})
+
+
+class SampleImport(Versioned):
+    sample_id: str = Field(min_length=1, max_length=64)
+    variant: str = Field(default='correct', min_length=1, max_length=64)
+
+
+@app.post('/api/projects/{pid}/sample', response_model=ProjectState, response_model_exclude_unset=True)
+def import_sample(pid: str, request: Request, body: SampleImport):
+    p = session_or_404(request, pid); check_version(p, body.version)
+    if p['ctl']: raise HTTPException(409, 'Load each sample into a new project; existing source bytes are immutable')
+    item = find_sample(body.sample_id)
+    variant = next((x for x in item['variants'] if x['id'] == body.variant), None)
+    if variant is None: raise HTTPException(404, 'Sample variant not found')
+    folder = ROOT / 'fixtures' / 'oracle' / item['id']
+    install_files(p, (folder / 'layout.ctl').read_bytes(), (folder / variant['file']).read_bytes(), 'reference.csv',
+                  (folder / 'reference.csv').read_bytes(), item['encoding'], None, None, 'reference_values')
+    p['sample'] = {k: item[k] for k in ('id', 'title', 'description', 'keys', 'record_length', 'supported')}
+    p['sample'].update(variant=variant['id'], exercise=variant['exercise'])
+    event(p, 'synthetic sample imported', sample_id=item['id'], variant=variant['id'])
+    repository.save(request.state.owner, p, body.version)
+    return build_state(p, record_num=2 if variant['id'] != 'correct' else 1)
 
 @app.post('/api/projects', status_code=201, response_model=ProjectState, response_model_exclude_unset=True)
 def create_project(request: Request, body: ProjectCreate):
@@ -334,11 +385,13 @@ def history_action(pid: str, action: Literal['undo', 'redo', 'reset'], request: 
     return build_state(p)
 
 @app.get('/api/ai/bedrock/status')
+@app.get('/api/ai/status')
 def bedrock_status(): return provider.status()
 
 @app.post('/api/ai/bedrock/test')
+@app.post('/api/ai/test')
 def bedrock_test(request: Request):
-    limit(('bedrock', request.state.owner)); return provider.test_connection()
+    limit(('ai', request.state.owner)); return provider.test_connection()
 
 class AIRequest(Versioned):
     capability: Literal['schema', 'mapping', 'investigate', 'recover', 'explain']
@@ -347,10 +400,10 @@ class AIRequest(Versioned):
 
 @app.post('/api/projects/{pid}/ai/recover')
 def ai_recover(pid: str, request: Request, body: AIRequest):
-    limit(('bedrock', request.state.owner))
+    limit(('ai', request.state.owner))
     p = session_or_404(request, pid); check_version(p, body.version)
     context = ai_context(p, body.capability, body.record, body.share_values)
-    if context is None: return {'skipped': True, 'reason': 'No unresolved findings for this record; a Bedrock call is unnecessary', 'state': build_state(p, body.record)}
+    if context is None: return {'skipped': True, 'reason': 'No unresolved findings for this record; an AI call is unnecessary', 'state': build_state(p, body.record)}
     if body.capability == 'recover' and not context.get('evidence'):
         return {'skipped': True, 'reason': 'INSUFFICIENT_EVIDENCE: reconcile a uniquely key-matched sheet and explicitly enable value sharing', 'state': build_state(p, body.record)}
     run = provider.invoke(body.capability, context)

@@ -1,4 +1,4 @@
-"""The application's only LLM provider. No provider fallback or executable tools."""
+"""Bedrock adapter and shared structured review contracts. No provider fallback."""
 from __future__ import annotations
 import hashlib
 import json
