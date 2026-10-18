@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from specs import DISPLAY_COLUMNS, SpecError, extract_spec, infer_layouts, infer_rules, inspect_dat, normalize_spec, render_dat, validate_spec
+from specs import DISPLAY_COLUMNS, MASTER_COLUMNS, SpecError, extract_spec, infer_layouts, infer_rules, inspect_dat, normalize_spec, render_dat, validate_spec
 
 
 def field(name, start, width, datatype='CHAR', padding='Trailing Space Padded (Left Aligned)', **rules):
@@ -51,6 +51,38 @@ def test_csv_preamble_and_additional_columns_do_not_replace_field_header():
     assert len(document['sections'][0]['metadata']) == 2
     assert document['fields'][0]['source']['row'] == 4
     assert document['fields'][0]['source']['cells']['length']['reference'] == 'CSV!4:6'
+
+
+def test_master_csv_explicit_padding_notation_and_record_condition():
+    condition = "RECORD_TYPE = '04' AND PROCESS = 'STD'"
+    rows = []
+    for name, start, end, padding, alignment, direction in (
+        ('RECORD_TYPE', 1, 2, '', 'EXACT', 'NONE'),
+        ('DATA', 3, 8, 'SPACE (0x20)', 'LEFT', 'RIGHT'),
+        ('PROCESS', 9, 11, '', 'EXACT', 'NONE'),
+    ):
+        rows.append({'id': name, 'field_name': name, 'mapping_type': 'POSITION',
+                     'start_pos': str(start), 'end_pos': str(end), 'length': str(end - start + 1),
+                     'datatype_conversion': 'CHAR', 'padding_alignment': 'Fixed Text (Exact Width)' if alignment == 'EXACT' else 'Trailing Space Padded (Left Aligned)',
+                     'sequence': str(len(rows) + 1), 'record_type': '4', 'mandatory': 'YES',
+                     'alignment': alignment, 'padding_byte': padding, 'padding_direction': direction,
+                     'conditional_rules': condition})
+    raw = csv_bytes([[''] * len(MASTER_COLUMNS), [c['label'] for c in MASTER_COLUMNS],
+                     *[[row.get(c['key'], '') for c in MASTER_COLUMNS] for row in rows]])
+    document = extract_spec('master.csv', raw)
+    approved = normalize_spec({'fields': document['fields'], 'layouts': [],
+                               'options': {'encoding': 'ascii', 'record_format': 'stream'}})
+    assert approved['issues'] == []
+    assert approved['layouts'][0]['id'] == '4'
+    assert approved['layouts'][0]['when'] == [
+        {'start': 1, 'end': 2, 'equals': '04', 'trim': True},
+        {'start': 9, 'end': 11, 'equals': 'STD', 'trim': True},
+    ]
+    assert approved['fields'][1]['rules']['padding'] == {'side': 'right', 'char': ' '}
+    assert inspect_dat(approved, b'04ABC   STD\n')['valid'] is True
+    rows[0]['conditional_rules'] = "RECORD_TYPE = '04' OR PROCESS = 'STD'"
+    invalid = normalize_spec({'fields': rows, 'layouts': []})
+    assert any(item['code'] == 'UNSUPPORTED_CONDITION' for item in invalid['issues'])
 
 
 def test_actual_uploaded_example_specs_keep_all_63_rows_and_routing_source():

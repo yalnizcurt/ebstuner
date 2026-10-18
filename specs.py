@@ -253,6 +253,33 @@ def infer_rules(field):
     return rules
 
 
+def _routing_conditions(expressions, fields):
+    when, by_name = [], {}
+    for field in fields:
+        rules = field.get('rules') or infer_rules(field)
+        if rules.get('start') and rules.get('end'):
+            by_name.setdefault(field['field_name'].strip().upper(), set()).add((rules['start'], rules['end']))
+
+    def convert(node):
+        if node[0] == 'and':
+            for child in node[1]: convert(child)
+            return
+        if node[0] != 'compare' or node[2] != '=' or node[3][0] != 'literal':
+            raise ValueError('Only explicit AND equality routing is supported')
+        operand = node[1]
+        if operand[0] == 'field':
+            spans = by_name.get(operand[1], set())
+            if len(spans) != 1: raise ValueError('Routing field is missing or has ambiguous positions: ' + operand[1])
+            start, end = next(iter(spans)); trim = True
+        elif operand[0] == 'range': start, end, trim = operand[1], operand[2], False
+        else: raise ValueError('Routing must reference a known source field or an explicit byte range')
+        condition = {'start': start, 'end': end, 'equals': node[3][1], 'trim': trim}
+        if condition not in when: when.append(condition)
+
+    for expression in expressions: convert(parse_condition(expression))
+    return when
+
+
 def infer_layouts(document, fields=None):
     """Translate only explicitly labelled source conditions; never guess a record identifier."""
     fields = fields if fields is not None else document.get('fields', [])
@@ -267,29 +294,8 @@ def infer_layouts(document, fields=None):
             text = ' '.join(str(value) for value in row.get('values', []) if str(value).strip()).strip()
             match = re.match(r'(?:CTL\s+)?(?:ROUTING\s+CONDITION|RECORD\s+CONDITION|WHEN)\s*:\s*(.+)$', text, re.I)
             if match: expressions.append((match.group(1), row.get('references', [])))
-        when = []
-        by_name = {}
-        for field in selected:
-            rules = field.get('rules') or infer_rules(field)
-            if rules.get('start') and rules.get('end'):
-                by_name.setdefault(field['field_name'].strip().upper(), set()).add((rules['start'], rules['end']))
         try:
-            def convert(node):
-                if node[0] == 'and':
-                    for child in node[1]: convert(child)
-                    return
-                if node[0] != 'compare' or node[2] != '=' or node[3][0] != 'literal':
-                    raise ValueError('Only explicit AND equality routing is supported')
-                operand = node[1]
-                if operand[0] == 'field':
-                    spans = by_name.get(operand[1], set())
-                    if len(spans) != 1: raise ValueError('Routing field is missing or has ambiguous positions: ' + operand[1])
-                    start, end = next(iter(spans)); trim = True
-                elif operand[0] == 'range': start, end, trim = operand[1], operand[2], False
-                else: raise ValueError('Routing must reference a known source field or an explicit byte range')
-                condition = {'start': start, 'end': end, 'equals': node[3][1], 'trim': trim}
-                if condition not in when: when.append(condition)
-            for expression, _ in expressions: convert(parse_condition(expression))
+            when = _routing_conditions([expression for expression, _ in expressions], selected)
         except ValueError as exc:
             findings.append(issue('SOURCE_ROUTING', f'{section["name"]}: source routing needs explicit review: {exc}'))
             when = []
@@ -303,11 +309,22 @@ def _layouts(spec):
     if spec.get('layouts'): return spec['layouts']
     groups = {}
     for field in spec.get('fields', []):
-        identifier = field.get('rules', {}).get('layout_id', 'primary')
+        identifier = field.get('record_type', '').strip() or field.get('rules', {}).get('layout_id', 'primary')
         groups.setdefault(identifier, []).append(field)
-    return [{'id': name, 'name': name, 'field_ids': [f['id'] for f in fields],
-             'record_length': spec.get('options', {}).get('record_length') or max((f.get('rules', {}).get('end') or 0 for f in fields), default=0),
-             'when': []} for name, fields in groups.items()]
+    layouts = []
+    for name, fields in groups.items():
+        sources = {f.get('conditional_rules', '').strip() for f in fields if f.get('conditional_rules', '').strip()}
+        text = next(iter(sources)) if len(sources) == 1 else None
+        try: when = _routing_conditions([text], fields) if text else []
+        except ValueError: when = []
+        layouts.append({'id': name, 'name': name, 'field_ids': [f['id'] for f in fields],
+                        'record_length': spec.get('options', {}).get('record_length') or max((f.get('rules', {}).get('end') or 0 for f in fields), default=0),
+                        'when': when, 'source_condition': text})
+    return layouts
+
+
+def _padding_character(value):
+    return ' ' if value.strip().upper() in ('SPACE', 'SPACE (0X20)', '0X20') else value
 
 
 def normalize_spec(draft):
@@ -329,12 +346,12 @@ def normalize_spec(draft):
         rules = {**baseline, **explicit}
         rules['required'] = {'YES': True, 'NO': False, 'UNKNOWN': None}.get(field['mandatory'])
         if isinstance(explicit.get('padding'), dict): rules['padding'] = {**baseline.get('padding', {}), **explicit['padding']}
-        if field['alignment'].upper() in ('LEFT', 'RIGHT'):
-            rules['padding']['side'] = 'right' if field['alignment'].upper() == 'LEFT' else 'left'
-        if field['padding_direction'].upper() in ('TRAILING', 'LEADING'):
-            rules['padding']['side'] = 'right' if field['padding_direction'].upper() == 'TRAILING' else 'left'
+        if field['alignment'].upper() in ('LEFT', 'RIGHT', 'EXACT'):
+            rules['padding']['side'] = {'LEFT': 'right', 'RIGHT': 'left', 'EXACT': 'none'}[field['alignment'].upper()]
+        if field['padding_direction'].upper() in ('TRAILING', 'LEADING', 'RIGHT', 'LEFT', 'NONE'):
+            rules['padding']['side'] = {'TRAILING': 'right', 'RIGHT': 'right', 'LEADING': 'left', 'LEFT': 'left', 'NONE': 'none'}[field['padding_direction'].upper()]
         if field['padding_byte']:
-            rules['padding']['char'] = field['padding_byte']
+            rules['padding']['char'] = _padding_character(field['padding_byte'])
         if field['allowed_values']:
             rules['allowed_values'] = field['allowed_values'].splitlines()
         if field['format'] and rules.get('datatype') == 'date':
@@ -370,19 +387,32 @@ def validate_spec(spec):
     sequences = [str(f.get('sequence', '')).strip() for f in fields]
     if any(not re.fullmatch(r'[1-9][0-9]*', value) for value in sequences):
         findings.append(issue('SEQUENCE', 'Every field needs a positive sequence number'))
+    layouts = _layouts(spec)
+    supported_conditions = set()
+    by_id = {field['id']: field for field in fields}
+    for layout in layouts:
+        condition_text = layout.get('source_condition')
+        if not condition_text: continue
+        selected = [by_id[field_id] for field_id in layout.get('field_ids', []) if field_id in by_id]
+        try:
+            if layout.get('when') == _routing_conditions([condition_text], selected):
+                supported_conditions.update((field['id'], condition_text) for field in selected)
+        except ValueError:
+            pass
     for f in fields:
         identifier, r = f.get('id'), f.get('rules') or infer_rules(f)
         if not isinstance(r, dict): return findings + [issue('RULE_TYPE', 'Field rules must be objects', identifier)]
         if not str(f.get('field_name', '')).strip(): findings.append(issue('FIELD_NAME', 'Field name is required', identifier))
-        if f.get('alignment', '').upper() not in ('', 'LEFT', 'RIGHT', 'UNSPECIFIED'):
-            findings.append(issue('ALIGNMENT', 'Alignment must be LEFT, RIGHT or UNSPECIFIED; center alignment is not supported', identifier))
-        if f.get('padding_direction', '').upper() not in ('', 'LEADING', 'TRAILING', 'NONE'):
-            findings.append(issue('PADDING_DIRECTION', 'Padding direction must be LEADING, TRAILING or NONE', identifier))
-        if f.get('padding_byte') and len(f['padding_byte'].encode('utf-8')) != 1:
+        if f.get('alignment', '').upper() not in ('', 'LEFT', 'RIGHT', 'EXACT', 'UNSPECIFIED'):
+            findings.append(issue('ALIGNMENT', 'Alignment must be LEFT, RIGHT, EXACT or UNSPECIFIED; center alignment is not supported', identifier))
+        if f.get('padding_direction', '').upper() not in ('', 'LEADING', 'TRAILING', 'LEFT', 'RIGHT', 'NONE'):
+            findings.append(issue('PADDING_DIRECTION', 'Padding direction must be LEADING, TRAILING, LEFT, RIGHT or NONE', identifier))
+        if f.get('padding_byte') and len(_padding_character(f['padding_byte']).encode('utf-8')) != 1:
             findings.append(issue('PADDING_BYTE', 'Padding byte must occupy exactly one byte', identifier))
         if f.get('format') and r.get('datatype') != 'date':
             findings.append(issue('UNSUPPORTED_FORMAT', 'Only explicit supported date masks can be executed locally', identifier))
-        if f.get('conditional_rules', '').strip():
+        condition_text = f.get('conditional_rules', '').strip()
+        if condition_text and (identifier, condition_text) not in supported_conditions:
             findings.append(issue('UNSUPPORTED_CONDITION', 'Conditional field rules require a supported executable definition', identifier))
         kind = r.get('mapping_type')
         if kind not in ('physical', 'filler', 'constant', 'system'): findings.append(issue('MAPPING_TYPE', 'Resolve the mapping type', identifier)); continue
