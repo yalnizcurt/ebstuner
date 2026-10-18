@@ -301,7 +301,7 @@ function saveBatchRules() {
 function renderProvider() {
   const ai = state?.ai_status;
   if (!ai) return;
-  $('#providerSummary').textContent = `Bedrock · ${ai.ai_available === false ? 'unavailable' : ai.model_id || 'not configured'}`;
+  $('#providerSummary').textContent = `${ai.provider || 'AI'} · ${ai.ai_available === false ? 'unavailable' : ai.model_id || 'not configured'}`;
 }
 function renderJobs() {
   const latest = new Map();
@@ -704,6 +704,6 @@ async function initialize(){
   const session=await request('/api/session');
   if(!session.authenticated){if(session.login_required){$('#loginPanel').classList.remove('hidden');$('#application').classList.add('hidden');return;}await request('/api/session',{method:'POST',body:'{}'});}
   $('#loginPanel').classList.add('hidden');$('#application').classList.remove('hidden');render();await listProjects();
-  try {const ai=await request('/api/ai/status');$('#providerSummary').textContent=`Bedrock · ${ai.ai_available===false?'unavailable':ai.model_id||'not configured'}`;}catch{$('#providerSummary').textContent='AI connection not verified';}
+  try {const ai=await request('/api/ai/status');$('#providerSummary').textContent=`${ai.provider||'AI'} · ${ai.ai_available===false?'unavailable':ai.model_id||'not configured'}`;}catch{$('#providerSummary').textContent='AI connection not verified';}
 }
 initialize().catch(error=>notify(error.message,true));
