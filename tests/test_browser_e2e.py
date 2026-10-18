@@ -30,7 +30,7 @@ import time
 import zipfile
 from pathlib import Path
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 import uvicorn
 import web
@@ -221,6 +221,52 @@ def test_browser_full_studio_workflow(server, tmp_path):
         page.wait_for_timeout(1000)
         assert page.is_visible("#projectTitle")
 
+        browser.close()
+
+
+def test_browser_next_issue_skips_preserved_records_and_explains_export_block(server, tmp_path):
+    spec_path = tmp_path / 'routed.csv'
+    with spec_path.open('w', newline='') as output:
+        writer = csv.DictWriter(output, fieldnames=[column['label'] for column in specs.MASTER_COLUMNS])
+        writer.writeheader()
+        for name, start, end, datatype in [('KIND', 1, 2, 'CHAR'), ('QUANTITY', 3, 6, 'INTEGER EXTERNAL')]:
+            row = {'id': name, 'field_name': name, 'mapping_type': 'POSITION', 'start_pos': start,
+                   'end_pos': end, 'length': end - start + 1, 'datatype_conversion': datatype,
+                   'padding_alignment': 'Fixed Text (Exact Width)', 'mandatory': 'YES',
+                   'record_type': 'detail', 'conditional_rules': "KIND = 'AA'"}
+            writer.writerow({column['label']: row.get(column['key'], '') for column in specs.MASTER_COLUMNS})
+    dat_path = tmp_path / 'mixed.dat'; dat_path.write_bytes(b'XX0001\nAA12X4\n')
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(); page.goto(server)
+        page.fill('#projectName', 'Blocked export guidance')
+        page.set_input_files('#specFile', str(spec_path)); page.set_input_files('#datFile', str(dat_path))
+        page.click('#uploadButton')
+        page.wait_for_selector('#reviewStage:not(.hidden)')
+        page.click('#fileRules > summary')
+        page.select_option('[data-option="unknown_records"]', 'preserve')
+        page.click('#confirmDialog button[value="confirm"]')
+        page.locator('tr[data-field-row="KIND"] button[data-details]').click()
+        expect(page.locator('#ruleLayout')).to_have_value('detail')
+        page.fill('#ruleAllowed', 'AA')
+        page.click('#saveRulesButton')
+        expect(page.locator('[data-spec-field="KIND"][data-column="allowed_values"]')).to_have_value('AA')
+        page.click('#saveSpecButton')
+        expect(page.locator('#saveSpecButton')).to_be_disabled()
+        page.click('#analyzeSpecButton')
+        expect(page.locator('#approveSpecButton')).to_be_enabled(timeout=15000)
+        page.click('#approveSpecButton')
+        page.click('#confirmDialog button[value="confirm"]')
+        expect(page.locator('#analyzeDatButton')).to_be_visible()
+        expect(page.locator('#recordNumber')).to_have_value('1')
+        expect(page.locator('#generateButton')).to_be_disabled()
+        expect(page.locator('#generationStatus')).to_contain_text('Record 2: QUANTITY: Value does not match')
+        expect(page.locator('#generationStatus')).to_contain_text('1 preserved record(s) have no approved layout')
+        page.click('#nextIssue')
+        expect(page.locator('#recordNumber')).to_have_value('2')
+        page.click('#nextIssue')
+        expect(page.locator('#recordNumber')).to_have_value('2')
+        expect(page.locator('#generateButton')).to_be_disabled()
         browser.close()
 
 

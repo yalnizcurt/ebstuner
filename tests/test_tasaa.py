@@ -281,4 +281,6 @@ def test_search_resource_limit_requires_review():
     result = analyze(spec, layout, b'ABXYZ', options=AlignmentOptions(max_states=1))
     assert result['resource_limit_reached'] is True
     assert result['candidate'] is None
+    assert result['classification'] == 'HUMAN_REVIEW_REQUIRED'
+    assert 'limit' in result['reason'].lower()
     assert certification_level(result) == 'HUMAN_REVIEW_REQUIRED'

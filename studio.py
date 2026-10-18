@@ -453,8 +453,8 @@ class StudioService:
         for record in representatives:
             alignment = record.get('alignment') or {}
             if alignment.get('status') == 'unsupported' or not alignment.get('candidates'):
-                if alignment.get('status') == 'unsupported':
-                    alignment_gaps.append({'record': record['number'], 'reason': alignment.get('reason', 'Unsupported alignment evidence')})
+                if alignment and alignment.get('status') != 'already_valid':
+                    alignment_gaps.append({'record': record['number'], 'reason': alignment.get('reason', 'No candidate mapping is available for AI review')})
                 continue
             if (alignment.get('status') == 'already_valid' and not alignment.get('spec_conflicts')
                     and not alignment.get('field_findings') and not alignment.get('ambiguity_regions')):
@@ -502,8 +502,11 @@ class StudioService:
             return base
         s = p['studio']
         document = s['document']
+        current_spec = normalize(s['spec'])
+        for question in current_spec.get('ai_questions', []):
+            if question not in current_spec['issues']: current_spec['issues'].append(question)
         base.update(stage=s['stage'], document={k: v for k, v in document.items() if k not in ('fields', 'sections')},
-                    spec=s['spec'], generated=s.get('generated'), ai_review=s.get('dat_ai'),
+                    spec=current_spec, generated=s.get('generated'), ai_review=s.get('dat_ai'),
                     ai_decisions=s.get('ai_decisions', []),
                     original_checksum=checksum(decode(p['original'])), dat_name=s['dat_name'],
                     history=p['history'][-100:], undo_count=len(s.get('undo', [])), redo_count=len(s.get('redo', [])))

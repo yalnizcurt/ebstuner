@@ -85,6 +85,50 @@ def test_master_csv_explicit_padding_notation_and_record_condition():
     assert any(item['code'] == 'UNSUPPORTED_CONDITION' for item in invalid['issues'])
 
 
+def test_allowed_values_must_be_compatible_with_routing_bytes():
+    source = field('KIND', 1, 2, padding='Fixed Text (Exact Width)', allowed_values=['4'])
+    layout = {'id': 'detail', 'field_ids': ['KIND'], 'record_length': 2,
+              'when': [{'start': 1, 'end': 2, 'equals': '04'}]}
+    invalid = normalize_spec({'fields': [source], 'layouts': [layout]})
+    conflicts = [item for item in invalid['issues'] if item['code'] == 'ROUTING_ALLOWED_VALUES']
+    assert len(conflicts) == 1 and conflicts[0]['field_id'] == 'KIND'
+    assert "'4'" in conflicts[0]['message'] and "'04'" in conflicts[0]['message']
+    assert invalid['fields'][0]['rules']['allowed_values'] == ['4']
+    source['rules']['allowed_values'] = ['04']
+    assert not normalize_spec({'fields': [source], 'layouts': [layout]})['issues']
+
+
+@pytest.mark.parametrize('layouts,code', [('invalid', 'LAYOUTS'), ([None], 'LAYOUT_TYPE'),
+                                          ([{'source_condition': 'KIND = 1', 'field_ids': [[]]}], 'LAYOUT_FIELDS')])
+def test_malformed_layouts_are_reported_without_crashing(layouts, code):
+    invalid = normalize_spec({'fields': [field('KIND', 1, 2)], 'layouts': layouts})
+    assert any(item['code'] == code for item in invalid['issues'])
+
+
+def test_routing_conflicts_use_the_actual_zero_padded_value_check():
+    source = field('CODE', 1, 4, padding='Leading Zero Padded', allowed_values=['12'])
+    layout = {'id': 'detail', 'field_ids': ['CODE'], 'record_length': 4,
+              'when': [{'start': 1, 'end': 4, 'equals': '0012'}]}
+    invalid = normalize_spec({'fields': [source], 'layouts': [layout]})
+    assert any(item['code'] == 'ROUTING_ALLOWED_VALUES' for item in invalid['issues'])
+    source['rules']['allowed_values'] = ['0012']
+    assert not normalize_spec({'fields': [source], 'layouts': [layout]})['issues']
+
+
+@pytest.mark.parametrize('equals,start,end,trim,values,required', [
+    ('A', 1, 1, False, ['AB'], True),
+    ('A', 1, 2, True, ['A'], True),
+    ('A ', 1, 2, False, ['A'], True),
+    ('  ', 1, 2, False, ['A'], False),
+])
+def test_routing_allowed_values_respects_partial_spans_padding_and_optional_blank(equals, start, end, trim, values, required):
+    source = field('KIND', 1, 2, allowed_values=values, required=required)
+    layout = {'id': 'detail', 'field_ids': ['KIND'], 'record_length': 2,
+              'when': [{'start': start, 'end': end, 'equals': equals, 'trim': trim}]}
+    approved = normalize_spec({'fields': [source], 'layouts': [layout]})
+    assert not approved['issues']
+
+
 def test_actual_uploaded_example_specs_keep_all_63_rows_and_routing_source():
     examples = Path(__file__).resolve().parents[1] / 'fixtures' / 'specifications'
     paths = sorted(examples.glob('*.csv'))
@@ -172,7 +216,20 @@ def test_char_identifiers_stay_text_and_decimal_date_rules_report_real_checks():
     assert bad['records'][0]['fields'][0]['percentage'] == 100
     assert 0 < bad['records'][0]['fields'][1]['percentage'] < 100
     assert any(x['code'] == 'DATATYPE' for x in bad['issues'])
+    assert all('does not match' in x['message'] for x in bad['issues'] if x['code'] == 'DATATYPE')
     with pytest.raises(SpecError): render_dat(approved, b'00AB12' + b'12OO.5000   ' + b'20230229')
+
+
+def test_extra_value_bytes_are_reported_at_their_original_positions_and_never_truncated():
+    approved = spec(field('CODE', 1, 2))
+    original = b'AB 2'
+    report = inspect_dat(approved, original)
+    length_issue = next(item for item in report['issues'] if item['code'] == 'RECORD_LENGTH')
+    assert 'position 4 (0x32)' in length_issue['message']
+    assert report['records'][0]['number'] == 1
+    assert not report['valid']
+    with pytest.raises(SpecError): render_dat(approved, original)
+    assert original == b'AB 2'
 
 
 @pytest.mark.parametrize('value', ['TOO-LONG', 'café', 'AA\nBB', 'AA\tBB'])

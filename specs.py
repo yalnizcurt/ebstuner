@@ -388,12 +388,16 @@ def validate_spec(spec):
     if any(not re.fullmatch(r'[1-9][0-9]*', value) for value in sequences):
         findings.append(issue('SEQUENCE', 'Every field needs a positive sequence number'))
     layouts = _layouts(spec)
+    if not isinstance(layouts, list): return findings + [issue('LAYOUTS', 'Record layouts must be a list')]
     supported_conditions = set()
     by_id = {field['id']: field for field in fields}
     for layout in layouts:
+        if not isinstance(layout, dict): continue
         condition_text = layout.get('source_condition')
-        if not condition_text: continue
-        selected = [by_id[field_id] for field_id in layout.get('field_ids', []) if field_id in by_id]
+        references = layout.get('field_ids', [])
+        if not isinstance(condition_text, str) or not condition_text or not isinstance(references, list): continue
+        if any(not isinstance(field_id, str) for field_id in references): continue
+        selected = [by_id[field_id] for field_id in references if field_id in by_id]
         try:
             if layout.get('when') == _routing_conditions([condition_text], selected):
                 supported_conditions.update((field['id'], condition_text) for field in selected)
@@ -486,6 +490,7 @@ def validate_spec(spec):
                 spans.append((reference, r))
         conditions = layout.get('when', [])
         if not isinstance(conditions, list): findings.append(issue('ROUTING', 'Routing must be an explicit list of byte equality conditions')); continue
+        valid_conditions = []
         for condition in conditions:
             if not isinstance(condition, dict): findings.append(issue('ROUTING', 'Routing conditions must be objects')); continue
             start, end = _integer(condition.get('start')), _integer(condition.get('end'))
@@ -493,6 +498,30 @@ def validate_spec(spec):
                 findings.append(issue('ROUTING', 'Unsupported or incomplete record routing condition'))
             elif width and end > width: findings.append(issue('ROUTING', 'Record routing reads outside its declared layout'))
             elif 'trim' in condition and not isinstance(condition['trim'], bool): findings.append(issue('ROUTING', 'Routing trim must be explicitly true or false'))
+            else: valid_conditions.append({**condition, 'start': start, 'end': end})
+        invalid_fields = {finding.get('field_id') for finding in findings if finding.get('severity', 'error') == 'error'}
+        encoding = spec.get('options', {}).get('encoding', 'ascii')
+        if not isinstance(encoding, str) or encoding.lower() not in ('ascii', 'latin1', 'iso-8859-1', 'cp1252', 'utf-8'): continue
+        for reference in references:
+            r = by_id[reference].get('rules', {})
+            values = r.get('allowed_values')
+            if reference in invalid_fields or not isinstance(values, list) or not r.get('start') or not r.get('end'): continue
+            local = [{**condition, 'start': condition['start'] - r['start'] + 1,
+                      'end': condition['end'] - r['start'] + 1} for condition in valid_conditions
+                     if r['start'] <= condition['start'] <= condition['end'] <= r['end']]
+            if not local: continue
+            possible = False
+            for value in [*values, *([''] if r.get('required') is not True else [])]:
+                try:
+                    data, _ = _format(value, r, encoding)
+                    normalized = data.decode(encoding).strip(' ')
+                except SpecError: continue
+                if (normalized in values or (not normalized and not r.get('required'))) and _route({'when': local}, data, encoding):
+                    possible = True; break
+            if not possible:
+                expected = ', '.join(repr(condition['equals']) for condition in local)[:160]
+                findings.append(issue('ROUTING_ALLOWED_VALUES',
+                                      f'Allowed values {repr(values)[:160]} cannot satisfy routing value(s) {expected} at this field; revise the specification', reference))
     if set(ids) - covered: findings.append(issue('FIELD_COVERAGE', 'Every source field must belong to an explicitly reviewed layout'))
     for finding in spec.get('issues', []):
         if finding.get('code') in ('FORMULA', 'UNMAPPED_ROW', 'DUPLICATE_COLUMN', 'NO_FIELDS') and finding not in findings: findings.append(finding)
@@ -593,17 +622,17 @@ def _field_checks(field, data, encoding):
                 'passed': 0, 'total': 1, 'percentage': 0.0, 'status': 'failed',
                 'staging_preview': None, 'preview_label': 'Local preview; not an Oracle database result'}
     value = text.strip(' ')
-    def check(code, passed, message): checks.append({'code': code, 'passed': passed, 'message': message})
-    check('WIDTH', len(data) == r['length'], f'Field occupies {r["length"]} bytes')
-    if r.get('required') is None: check('MANDATORY_UNVERIFIED', None, 'Mandatory status is unknown; blank-value rule cannot be verified')
-    else: check('REQUIRED', bool(value) or not r.get('required'), 'Required value is present' if r.get('required') else 'Blank value is permitted')
-    check('CONTROL_CHARACTERS', all(ord(c) >= 32 and ord(c) != 127 for c in text), 'No prohibited control characters')
-    if r.get('allow_internal_spaces', r.get('allow_internal_whitespace')) is False: check('INTERNAL_WHITESPACE', not any(c.isspace() for c in value), 'No prohibited internal whitespace')
+    def check(code, passed, message, failure): checks.append({'code': code, 'passed': passed, 'message': failure if passed is False else message})
+    check('WIDTH', len(data) == r['length'], f'Field occupies {r["length"]} bytes', f'Field has {len(data)} bytes; expected {r["length"]}')
+    if r.get('required') is None: check('MANDATORY_UNVERIFIED', None, 'Mandatory status is unknown; blank-value rule cannot be verified', '')
+    else: check('REQUIRED', bool(value) or not r.get('required'), 'Required value is present' if r.get('required') else 'Blank value is permitted', 'Required value is blank')
+    check('CONTROL_CHARACTERS', all(ord(c) >= 32 and ord(c) != 127 for c in text), 'No prohibited control characters', 'Field contains prohibited control characters')
+    if r.get('allow_internal_spaces', r.get('allow_internal_whitespace')) is False: check('INTERNAL_WHITESPACE', not any(c.isspace() for c in value), 'No prohibited internal whitespace', 'Field contains prohibited internal whitespace')
     try: formatted, _ = _format(value, r, encoding); padding_ok = formatted == data
     except SpecError: padding_ok = False
-    check('PADDING', padding_ok, 'Padding follows the approved rule')
-    if r.get('constant') is not None: check('CONSTANT', value == r['constant'], 'Value equals its declared constant')
-    if r.get('allowed_values') is not None: check('ALLOWED_VALUES', value in r['allowed_values'] or (not value and not r['required']), 'Value belongs to the approved set')
+    check('PADDING', padding_ok, 'Padding follows the approved rule', 'Padding does not match the approved rule')
+    if r.get('constant') is not None: check('CONSTANT', value == r['constant'], 'Value equals its declared constant', 'Value differs from its declared constant')
+    if r.get('allowed_values') is not None: check('ALLOWED_VALUES', value in r['allowed_values'] or (not value and not r['required']), 'Value belongs to the approved set', f'Value is not in the allowed set {repr(r["allowed_values"])[:160]}')
     datatype = r['datatype']
     if value and datatype != 'char':
         valid = True
@@ -618,11 +647,11 @@ def _field_checks(field, data, encoding):
                 mask = r['date_format']; valid = len(value) == len(mask)
                 datetime.strptime(value, DATE_FORMATS[mask])
             except (ValueError, KeyError): valid = False
-        check('DATATYPE', valid, f'Value matches the approved {datatype} format')
+        check('DATATYPE', valid, f'Value matches the approved {datatype} format', f'Value does not match the approved {datatype} format')
     if value and r.get('conversion') == 'to_number' and datatype == 'char':
         try: valid = Decimal(value).is_finite()
         except InvalidOperation: valid = False
-        check('CONVERSION', valid, 'Number-conversion preview is evaluable')
+        check('CONVERSION', valid, 'Number-conversion preview is evaluable', 'Value cannot be converted to a number')
     passed = sum(c['passed'] is True for c in checks)
     preview = value
     if any(c['passed'] is not True for c in checks): preview = None
@@ -708,7 +737,10 @@ def _process(spec, raw, edits=None, options=None):
             record_issues.append(issue('UNCERTAIN_BOUNDARIES', 'Record width or field boundaries need explicit confirmation before formatting', record=number))
             pending += 1
         if len(row) > width and not certified_repair and not settings.get('preserve_extra_bytes', False):
-            record_issues.append(issue('RECORD_LENGTH', f'Record has {len(row)} bytes; approved layout has {width}; extra bytes are never truncated', record=number))
+            extra_value = next(((offset, byte) for offset, byte in enumerate(row[width:], width + 1) if byte != 32), None)
+            extra_note = (f'; extra non-space byte at position {extra_value[0]} (0x{extra_value[1]:02X}) requires an approved owner'
+                          if extra_value else '; extra spaces require approved padding or filler ownership')
+            record_issues.append(issue('RECORD_LENGTH', f'Record has {len(row)} bytes; approved layout has {width}{extra_note}; extra bytes are never truncated', record=number))
         writes = {}
         for identifier in layout['field_ids']:
             field, r = by_id[identifier], by_id[identifier]['rules']

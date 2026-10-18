@@ -165,6 +165,45 @@ def test_dat_review_uses_approved_version_and_stale_edits_supersede_job(work):
     assert stored['studio']['dat_ai']['spec_checksum'] == project['studio']['approved_checksum']
 
 
+def test_saved_approved_spec_is_rechecked_for_routing_contradictions(work):
+    repository, owner, project, provider, service, clock = work
+    approved = copy.deepcopy(project['studio']['spec'])
+    for field in approved['fields']:
+        field['mandatory'] = 'NO'; field['rules']['required'] = False
+    approved['fields'][0]['rules']['allowed_values'] = ['AB']
+    approved['layouts'][0]['when'] = [{'start': 1, 'end': 2, 'equals': 'ZZ'}]
+    approved.update(approved=True, ai_complete=True, version=1, issues=[])
+    project['studio'].update(spec=approved, approved_spec=copy.deepcopy(approved))
+    state = service.state(owner, project)
+    assert any(item['code'] == 'ROUTING_ALLOWED_VALUES' for item in state['spec']['issues'])
+    assert not state['review']['valid']
+    assert state['review']['issues'][0]['code'] == 'ROUTING_ALLOWED_VALUES'
+    assert project['studio']['spec']['issues'] == []
+    assert project['original'] == encode(b'AB0042\r\n')
+
+
+def test_ai_review_cannot_claim_complete_alignment_coverage_without_candidates(work, monkeypatch):
+    repository, owner, project, provider, service, clock = work
+    approved = copy.deepcopy(project['studio']['spec'])
+    for field in approved['fields']:
+        field['mandatory'] = 'NO'; field['rules']['required'] = False
+    approved.update(approved=True, ai_complete=True, version=1)
+    project['studio'].update(spec=approved, approved_spec=copy.deepcopy(approved), approved_checksum=digest(approved))
+    repository.save(owner, project, project['version'])
+    monkeypatch.setattr('studio.specs.inspect_dat', lambda *args, **kwargs: {
+        'records': [{'number': 1, 'fields': [], 'alignment': {'status': 'needs_review',
+                     'candidates': [], 'reason': 'Search resource limit reached'}}],
+        'record_summaries': [], 'issues': [], 'summary': {'record_count': 1}})
+    service.enqueue(owner, project, 'dat'); service.process(service.claim())
+    assert service.jobs(owner, project['id'])[0]['status'] == 'succeeded'
+    stored = repository.load(owner, project['id'])
+    review = stored['studio']['dat_ai']
+    assert review['complete'] is False
+    assert review['alignment_gaps'] == [{'record': 1, 'reason': 'Search resource limit reached'}]
+    assert review['alignment_reviews'] == []
+    assert stored['original'] == project['original']
+
+
 @pytest.mark.parametrize('failed_batch,completed_before_retry', [(1, 0), (2, 1)])
 def test_dat_output_schema_retry_preserves_sources_and_resumes_batches(work, monkeypatch,
                                                                        failed_batch, completed_before_retry):

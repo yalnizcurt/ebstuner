@@ -917,6 +917,13 @@ def analyze(spec: dict, layout: dict, row: bytes, *, beam_width: int = 64, max_s
         validation_status = 'PASSED'
         cert_level = 'GLOBALLY_CERTIFIED_WITHIN_FORMAL_CONSTRAINT_MODEL'
         reason = 'Unique exact-value mapping with complete byte ownership'
+    elif limited and not best:
+        classification = HUMAN_REVIEW_REQUIRED
+        status = 'needs_review'
+        structural_status = 'REVIEW_REQUIRED'
+        validation_status = 'INCOMPLETE'
+        cert_level = 'HUMAN_REVIEW_REQUIRED'
+        reason = 'Search resource limit reached without a feasible mapping; repairability is not established'
     elif not best or len(alternatives) == 0:
         classification = UNRECOVERABLE
         status = 'needs_review'
