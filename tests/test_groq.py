@@ -2,7 +2,7 @@ import json
 import httpx
 import pytest
 import ai
-from bedrock import AIError, AmazonBedrockProvider
+from bedrock import AIError, AIResult, AmazonBedrockProvider
 from groq_provider import ENDPOINT, GroqProvider
 from groq_budget import GroqCoordinator
 
@@ -79,6 +79,65 @@ def test_upstream_errors_and_credentials_are_sanitized(monkeypatch, status):
     assert state['connection_status'] == 'error' and state['model_accessible'] is False
     assert TOKEN not in json.dumps(state) and 'secret server details' not in json.dumps(state)
     assert 'token' not in state and 'api_key' not in state and client.is_closed
+
+
+def test_provider_generated_schema_failure_retries_without_exposing_or_caching_output():
+    private = TOKEN + ' sensitive DAT content'
+    instance, client = provider(lambda request: httpx.Response(400, json={'error': {
+        'code': 'json_validate_failed', 'type': 'invalid_request_error',
+        'message': private + ': expected string got null /findings/21/field_id',
+        'failed_generation': private}}))
+    with pytest.raises(AIError) as caught:
+        instance.invoke_structured('studio_dat', {}, AIResult, 'Review source fields.', scope='owner/project/source')
+    assert caught.value.code == 'GROQ_OUTPUT_SCHEMA'
+    assert caught.value.retryable and caught.value.retry_after == 1
+    assert 'retry' in caught.value.message.lower()
+    assert TOKEN not in str(caught.value) and 'sensitive DAT content' not in str(caught.value)
+    assert 'failed_generation' not in str(caught.value) and client.is_closed
+    with instance.coordinator.transaction() as db:
+        assert db.execute('SELECT state FROM groq_calls').fetchall() == [('failed',)]
+        assert db.execute('SELECT COUNT(*) FROM groq_cache').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('body', [
+    json.dumps({'error': {'code': 'invalid_request_error', 'message': TOKEN}}).encode(),
+    json.dumps({'error': {'code': 'json_validate_failed ' + TOKEN, 'failed_generation': TOKEN}}).encode(),
+    json.dumps({'error': TOKEN}).encode(),
+    json.dumps([{'error': {'code': 'json_validate_failed'}}]).encode(),
+    b'not JSON ' + TOKEN.encode(),
+    b'\xff\xfe' + TOKEN.encode(),
+    json.dumps({'error': {'code': 'json_validate_failed', 'message': TOKEN}}).encode() + b' ' * 20_000,
+], ids=['configuration', 'malicious-code', 'malformed-error', 'wrong-root', 'invalid-json', 'invalid-encoding', 'oversized'])
+def test_other_400_bodies_stay_nonretryable_and_sanitized(body):
+    instance, client = provider(lambda request: httpx.Response(400, content=body))
+    with pytest.raises(AIError) as caught:
+        instance.invoke_structured('studio_dat', {}, AIResult, 'Review source fields.', scope='owner/project/source')
+    assert caught.value.code == 'GROQ_400' and not getattr(caught.value, 'retryable', False)
+    assert TOKEN not in str(caught.value) and 'failed_generation' not in str(caught.value)
+    assert client.is_closed
+    with instance.coordinator.transaction() as db:
+        assert db.execute('SELECT state FROM groq_calls').fetchall() == [('failed',)]
+        assert db.execute('SELECT COUNT(*) FROM groq_cache').fetchone()[0] == 0
+
+
+def test_error_body_read_is_bounded_and_closes_response():
+    class LargeError(httpx.SyncByteStream):
+        bytes_read = 0
+        closed = False
+
+        def __iter__(self):
+            for chunk in [b'{"error":{"code":"json_validate_failed"}}'] + [b' ' * 4096] * 100:
+                self.bytes_read += len(chunk)
+                yield chunk
+
+        def close(self):
+            self.closed = True
+
+    stream = LargeError()
+    instance, client = provider(lambda request: httpx.Response(400, stream=stream))
+    with pytest.raises(AIError) as caught: instance.invoke('explain', {})
+    assert caught.value.code == 'GROQ_400' and not getattr(caught.value, 'retryable', False)
+    assert stream.bytes_read <= 24_576 and stream.closed and client.is_closed
 
 
 def test_connection_status_tracks_key_rotation_without_exposing_credentials(monkeypatch):

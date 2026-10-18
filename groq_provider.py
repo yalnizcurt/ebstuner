@@ -52,6 +52,17 @@ def structured_schema(response_model):
     return clean(response_model.model_json_schema())
 
 
+def _output_schema_failure(response):
+    data = bytearray()
+    for chunk in response.iter_bytes(chunk_size=4096):
+        if len(data) + len(chunk) > 16_384: return False
+        data.extend(chunk)
+    try: payload = json.loads(data)
+    except (ValueError, RecursionError): return False
+    return (isinstance(payload, dict) and isinstance(payload.get('error'), dict)
+            and payload['error'].get('code') == 'json_validate_failed')
+
+
 class GroqProvider:
     def __init__(self, client_factory=None, coordinator=None, tokenizer=None):
         self.client_factory = client_factory
@@ -167,8 +178,11 @@ class GroqProvider:
                             404: 'Groq model is unavailable; check GROQ_MODEL.', 429: 'Groq rate limit reached; analysis remains queued.',
                             400: 'Groq rejected the model, schema or request settings.'}
                     if status != 200:
+                        output_schema_failure = status == 400 and _output_schema_failure(response)
                         delay = self.coordinator.finish(reservation, headers=headers, status=status); reservation = None
                         message = safe.get(status, 'Groq request failed; analysis remains pending.')
+                        if output_schema_failure:
+                            raise retry_error('GROQ_OUTPUT_SCHEMA', 'Groq returned an invalid structured review; analysis will retry automatically.', 1)
                         if status in (429, 500, 502, 503, 504): raise retry_error('GROQ_' + str(status), message, delay)
                         raise AIError('GROQ_' + str(status), message)
                     chunks = []; size = 0

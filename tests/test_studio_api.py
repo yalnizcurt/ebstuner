@@ -266,3 +266,36 @@ def test_spec_revision_invalidates_approval_but_preserves_explicit_rules(client)
     assert state['spec']['fields'][0]['rules']['required'] is False
     assert state['spec']['fields'][0]['rules']['allowed_values'] == ['ABC Trading']
     assert call(client, pid, state, '/generate').status_code == 409
+
+
+def test_dat_ai_context_scopes_field_findings_and_preserves_unknown_record(client):
+    original = BAD + b'UNMAPPED'.ljust(38, b' ') + b'\r\n'
+    pid, state = approved(client, original)
+    layouts = copy.deepcopy(state['spec']['layouts'])
+    layouts[0]['when'] = [{'start': 1, 'end': 3, 'equals': 'ABC'}]
+    options = {**state['spec']['options'], 'unknown_records': 'preserve'}
+    revised = client.put(f'/api/projects/{pid}/studio/spec', headers=H,
+        json={'version': state['project']['version'], 'fields': state['spec']['fields'],
+              'options': options, 'layouts': layouts})
+    assert revised.status_code == 200, revised.text
+    approval = call(client, pid, revised.json(), '/approve')
+    assert approval.status_code == 200, approval.text
+    state = approval.json()
+    assert call(client, pid, state, '/analyze-dat').status_code == 200
+    state = finish(client, pid, 'dat')
+
+    contexts = [context for capability, context, _ in web.provider.calls if capability == 'studio_dat']
+    assert contexts
+    by_id = {field['id']: field['field_name'] for field in state['spec']['fields']}
+    for context in contexts:
+        supplied_ids = {finding['field_id'] for finding in context['findings']}
+        assert supplied_ids
+        assert {field['id'] for field in context['spec_fields']} == supplied_ids
+        assert all(field['name'] == by_id[field['id']] for field in context['spec_fields'])
+        assert 'CUSTOMER' not in {field['name'] for field in context['spec_fields']}
+        assert all(finding['record'] == 1 and finding['field_id'] in by_id for finding in context['findings'])
+        assert all('field_id' not in finding for finding in context['file_issues'])
+        unknown = [finding for finding in context['file_issues'] if finding['code'] == 'UNKNOWN_LAYOUT']
+        assert len(unknown) == 1 and unknown[0]['record'] == 2
+        assert not any(finding.get('code') == 'UNKNOWN_LAYOUT' for finding in context['findings'])
+    assert client.get(f'/api/projects/{pid}/studio/download?original=true').content == original

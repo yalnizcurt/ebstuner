@@ -163,3 +163,60 @@ def test_dat_review_uses_approved_version_and_stale_edits_supersede_job(work):
     stored = repository.load(owner, project['id'])
     assert stored['studio']['dat_ai']['complete']
     assert stored['studio']['dat_ai']['spec_checksum'] == project['studio']['approved_checksum']
+
+
+@pytest.mark.parametrize('failed_batch,completed_before_retry', [(1, 0), (2, 1)])
+def test_dat_output_schema_retry_preserves_sources_and_resumes_batches(work, monkeypatch,
+                                                                       failed_batch, completed_before_retry):
+    """A provider schema rejection cannot commit a partial DAT audit or repeat completed batches."""
+    repository, owner, project, provider, service, clock = work
+    approved = copy.deepcopy(project['studio']['spec'])
+    for field in approved['fields']:
+        field['mandatory'] = 'NO'
+        field['rules']['required'] = False
+    approved.update(approved=True, ai_complete=True, version=1)
+    assert not normalize(approved)['issues']
+    project['studio'].update(spec=approved, approved_spec=copy.deepcopy(approved),
+                             approved_checksum=digest(approved))
+    repository.save(owner, project, project['version'])
+    original = project['original']
+    approved_snapshot = copy.deepcopy(project['studio']['approved_spec'])
+
+    batches = provider.batches
+    def two_dat_batches(capability, items, response_model, instructions, context=None, key='items', max_items=None):
+        contexts = batches(capability, items, response_model, instructions, context, key, max_items)
+        if capability == 'studio_dat':
+            return [{**contexts[0], 'batch_marker': 1}, {**contexts[0], 'batch_marker': 2}]
+        return contexts
+    monkeypatch.setattr(provider, 'batches', two_dat_batches)
+    invoke = provider.invoke_structured
+    seen, failed = [], [False]
+    def reject_once(capability, context, response_model, instructions, scope):
+        if capability == 'studio_dat':
+            marker = context['batch_marker']
+            seen.append(marker)
+            if marker == failed_batch and not failed[0]:
+                failed[0] = True
+                raise retry_error('GROQ_OUTPUT_SCHEMA', 'Synthetic provider returned a schema error', 1)
+        return invoke(capability, context, response_model, instructions, scope)
+    monkeypatch.setattr(provider, 'invoke_structured', reject_once)
+
+    service.enqueue(owner, project, 'dat')
+    service.process(service.claim())
+    pending = service.jobs(owner, project['id'])[0]
+    assert pending['status'] == 'retry_wait'
+    assert pending['completed_batches'] == completed_before_retry and pending['total_batches'] == 2
+    assert not any(call['capability'] == 'studio_alignment' for call in provider.calls)
+    stored = repository.load(owner, project['id'])
+    assert stored['original'] == original
+    assert stored['studio']['approved_spec'] == approved_snapshot
+    assert not (stored['studio'].get('dat_ai') or {}).get('complete')
+
+    clock[0] = pending['retry_at']
+    service.process(service.claim())
+    completed = service.jobs(owner, project['id'])[0]
+    assert completed['status'] == 'succeeded' and completed['error'] is None
+    assert seen == ([1, 1, 2] if failed_batch == 1 else [1, 2, 2])
+    stored = repository.load(owner, project['id'])
+    assert stored['original'] == original and stored['studio']['approved_spec'] == approved_snapshot
+    assert stored['studio']['dat_ai']['complete']
