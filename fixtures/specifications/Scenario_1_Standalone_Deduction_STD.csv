@@ -1,0 +1,74 @@
+Scenario 1: Standalone Deduction (PROCESS = 'STD'),,,,,,,,,
+Target Table: AR_PAYMENTS_INTERFACE & XXDRC_AR_CAA_STG | PROCESS: STD | PROCESS_TYPE: CMDM,,,,,,,,,
+CTL Routing Condition: RECORD_TYPE = '04' AND PROCESS = 'STD',,,,,,,,,
+Business Description: Triggered when customer deducts an amount from remittance. Automatically stages records to create both a Credit Memo (CM) and Debit Memo (DM) for deduction tracking.,,,,,,,,,
+,,,,,,,,,
+Raw DAT Sample Line (from XXDRC_AR_POC_DATA_COMMAN_ALL.dat):,,,,,,,,,
+04103                      001       1002CM99030-1                                        -10000Std deduction                 8810240                       SYN_ATTR1_VAL                                                                                                                                         ATTRIBUTE2-SAMPLE                                                                                                                                     ATTRIBUTE3-SAMPLE                                                                                                                                     CUSTOMER_REFERENCE1                                                                                 SYN_CORP_OU                                       USD  260910161231CM99030-1                     10000BR Automatic Numbering                            Credit Memo from Projects                                                       SYN_LOC_HQ (OPS)                        CM_COMMENTS                                                                                                                                                                                                                                     DM99030-1                     10000BR Automatic Numbering                            Return                                                                          IMMEDIATE      SYN_LOC_HQ (OPS)                        DM_COMMENTS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               Standard Deduction                                                                                  STD       CMDM      ORIGINAL_INVOICE_NUMBER                                                                                                                               WEB_PO_NUMBER                                                                                                                                         FORM_NUMBER                                                                                                                                           RGA_NUMBER                                                                                                                                            CUSTOMER_PO_NUMBER                                                                                                                                    ATTRIBUTE10                                                                                         ATTRIBUTE11                                                                                         IMMEDIATE      Credit Memo         Debit Memo,,,,,,,,,
+,,,,,,,,,
+Field Name,Category / Functional Group,Mapping Type,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Raw Sample Value in DAT File (Quoted),Cleansed Output in Oracle Staging Table
+LOCKBOX_GROUP_ID,System,EXPRESSION,-,-,N/A,"XXDRC_AR_LOCKBOX_GROUP_ID_SEQ.CURRVAL",N/A (System / Expression),N/A (EXPRESSION),"XXDRC_AR_LOCKBOX_GROUP_ID_SEQ.CURRVAL"
+PROCESS_SEQ_ID,System,EXPRESSION,-,-,N/A,"XXDRC_AR_CAA_PROCESS_SEQ.nextval",N/A (System / Expression),N/A (EXPRESSION),"XXDRC_AR_CAA_PROCESS_SEQ.nextval"
+CREATION_DATE,System,EXPRESSION,-,-,N/A,DATE 'RRMMDD',N/A (System / Expression),N/A (EXPRESSION),DATE 'RRMMDD'
+LAST_UPDATE_DATE,System,EXPRESSION,-,-,N/A,DATE 'RRMMDD',N/A (System / Expression),N/A (EXPRESSION),DATE 'RRMMDD'
+CREATED_BY,System,SPECIAL/EXPR,-,-,N/A,"fnd_global.user_id",N/A (System / Expression),N/A (SPECIAL/EXPR),"fnd_global.user_id"
+LAST_UPDATED_BY,System,SPECIAL/EXPR,-,-,N/A,"fnd_global.user_id",N/A (System / Expression),N/A (SPECIAL/EXPR),"fnd_global.user_id"
+CM_STATUS,System,CONSTANT,-,-,N/A,'NEW',N/A (System / Expression),N/A (CONSTANT),'NEW'
+DM_STATUS,System,CONSTANT,-,-,N/A,'NEW',N/A (System / Expression),N/A (CONSTANT),'NEW'
+RECORD_TYPE,Header/Batch,POSITION,1,2,2,CHAR,Fixed Text (Exact Width),"04",04
+BATCH_NAME,Header/Batch,POSITION,3,27,25,CHAR,Trailing Space Padded (Left Aligned),"103                      ",103
+ITEM_NUMBER,Header/Batch,POSITION,28,37,10,CHAR,Trailing Space Padded (Left Aligned),"001       ",001
+OVERFLOW_INDICATOR,Header/Batch,POSITION,38,38,1,CHAR,Fixed Text (Exact Width),"1",1
+OVERFLOW_SEQUENCE,Header/Batch,POSITION,39,41,3,CHAR,Fixed Text (Exact Width),"002",002
+INVOICE1,Application,POSITION,42,91,50,CHAR,Trailing Space Padded (Left Aligned),"CM99030-1                                         ",CM99030-1
+AMOUNT_APPLIED1,Application,POSITION,92,106,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"         -10000",-100.00
+CUSTOMER_REASON1,Application,POSITION,107,136,30,CHAR,Trailing Space Padded (Left Aligned),"Std deduction                 ",Std deduction
+CUSTOMER_NUMBER,Customer,POSITION,137,166,30,CHAR,Trailing Space Padded (Left Aligned),"8810240                       ",8810240
+ATTRIBUTE1,Flexfield,POSITION,167,316,150,CHAR,Trailing Space Padded (Left Aligned),"SYN_ATTR1_VAL                                                                                                                                         ",SYN_ATTR1_VAL
+ATTRIBUTE2,Flexfield,POSITION,317,466,150,CHAR,Trailing Space Padded (Left Aligned),"ATTRIBUTE2-SAMPLE                                                                                                                                     ",ATTRIBUTE2-SAMPLE
+ATTRIBUTE3,Flexfield,POSITION,467,616,150,CHAR,Trailing Space Padded (Left Aligned),"ATTRIBUTE3-SAMPLE                                                                                                                                     ",ATTRIBUTE3-SAMPLE
+CUSTOMER_REFERENCE1,Flexfield,POSITION,617,716,100,CHAR,Trailing Space Padded (Left Aligned),"CUSTOMER_REFERENCE1                                                                                 ",CUSTOMER_REFERENCE1
+ORGANIZATION_NAME,Common,POSITION,717,766,50,CHAR,Trailing Space Padded (Left Aligned),"SYN_CORP_OU                                       ",SYN_CORP_OU
+CURRENCY_CODE,Common,POSITION,767,771,5,CHAR,Trailing Space Padded (Left Aligned),"USD  ",USD
+PAYMENT_DATE,Common,POSITION,772,777,6,DATE 'RRMMDD',Fixed Date Format Mask,"260910",260910
+GL_DATE,Common,POSITION,778,783,6,DATE 'RRMMDD',Fixed Date Format Mask,"161231",161231
+CM_TRX_NUMBER,Credit Memo,POSITION,784,803,20,CHAR,Trailing Space Padded (Left Aligned),"CM99030-1           ",CM99030-1
+CM_AMOUNT,Credit Memo,POSITION,804,818,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"          10000",100.00
+CM_BATCH_SOURCE_NM,Credit Memo,POSITION,819,868,50,CHAR,Trailing Space Padded (Left Aligned),"BR Automatic Numbering                            ",BR Automatic Numbering
+CM_REASON_CODE,Credit Memo,POSITION,869,948,80,CHAR,Trailing Space Padded (Left Aligned),"Credit Memo from Projects                                                       ",Credit Memo from Projects
+CM_BILL_TO_LOCATION,Credit Memo,POSITION,949,988,40,CHAR,Trailing Space Padded (Left Aligned),"SYN_LOC_HQ (OPS)                        ",SYN_LOC_HQ (OPS)
+CM_COMMENTS,Credit Memo,POSITION,989,1228,240,CHAR,Trailing Space Padded (Left Aligned),"CM_COMMENTS                                                                                                                                                                                                                                     ",CM_COMMENTS
+DM_TRX_NUMBER,Debit Memo,POSITION,1229,1248,20,CHAR,Trailing Space Padded (Left Aligned),"DM99030-1           ",DM99030-1
+DM_AMOUNT,Debit Memo,POSITION,1249,1263,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"          10000",100.00
+DM_BATCH_SOURCE_NM,Debit Memo,POSITION,1264,1313,50,CHAR,Trailing Space Padded (Left Aligned),"BR Automatic Numbering                            ",BR Automatic Numbering
+DM_REASON_CODE,Debit Memo,POSITION,1314,1393,80,CHAR,Trailing Space Padded (Left Aligned),"Return                                                                          ",Return
+DM_TERM_NAME,Debit Memo,POSITION,1394,1408,15,CHAR,Trailing Space Padded (Left Aligned),"IMMEDIATE      ",IMMEDIATE
+DM_BILL_TO_LOCATION,Debit Memo,POSITION,1409,1448,40,CHAR,Trailing Space Padded (Left Aligned),"SYN_LOC_HQ (OPS)                        ",SYN_LOC_HQ (OPS)
+DM_COMMENTS,Debit Memo,POSITION,1449,1688,240,CHAR,Trailing Space Padded (Left Aligned),"DM_COMMENTS                                                                                                                                                                                                                                     ",DM_COMMENTS
+ADJ_CUSTOMER_REFERENCE,Adjustment,POSITION,1689,1718,30,CHAR,Trailing Space Padded (Left Aligned),"                              ",<NULL / BLANK>
+ADJUSTMENT_ACTIVITY_NAME,Adjustment,POSITION,1719,1768,50,CHAR,Trailing Space Padded (Left Aligned),"                                                  ",<NULL / BLANK>
+ADJUSTMENT_AMOUNT,Adjustment,POSITION,1769,1783,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"               ",<NULL / BLANK>
+ADJ_GL_ACCOUNT_NUMBER,Adjustment,POSITION,1784,1833,50,CHAR,Trailing Space Padded (Left Aligned),"                                                  ",<NULL / BLANK>
+ADJUSTMENT_TYPE,Adjustment,POSITION,1834,1863,30,CHAR,Trailing Space Padded (Left Aligned),"                              ",<NULL / BLANK>
+ADJ_REASON_CODE,Adjustment,POSITION,1864,1943,80,CHAR,Trailing Space Padded (Left Aligned),"                                                                                ",<NULL / BLANK>
+RECEIPT_NUMBER,On Account,POSITION,1944,1973,30,CHAR,Trailing Space Padded (Left Aligned),"                              ",<NULL / BLANK>
+OA_AMOUNT,On Account,POSITION,1974,1988,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"               ",<NULL / BLANK>
+OA_REASON_CODE,On Account,POSITION,1989,2068,80,CHAR,Trailing Space Padded (Left Aligned),"                                                                                ",<NULL / BLANK>
+CB_TRX_NUMBER,Charge Back,POSITION,2069,2083,15,CHAR,Trailing Space Padded (Left Aligned),"               ",<NULL / BLANK>
+CB_AMOUNT,Charge Back,POSITION,2084,2098,15,DECIMAL EXTERNAL,Leading Space Padded (Right Aligned),"               ",<NULL / BLANK>
+CB_REASON_CODE,Charge Back,POSITION,2099,2178,80,CHAR,Trailing Space Padded (Left Aligned),"                                                                                ",<NULL / BLANK>
+TRANSACTION_MEMO_LINE,Process ID,POSITION,2179,2278,100,CHAR,Trailing Space Padded (Left Aligned),"Standard Deduction                                                                                  ",Standard Deduction
+PROCESS,Process ID,POSITION,2279,2288,10,CHAR,Trailing Space Padded (Left Aligned),"STD       ",STD
+PROCESS_TYPE,Process ID,POSITION,2289,2298,10,CHAR,Trailing Space Padded (Left Aligned),"CMDM      ",CMDM
+ATTRIBUTE6,Flexfield,POSITION,2299,2448,150,CHAR,Trailing Space Padded (Left Aligned),"ORIGINAL_INVOICE_NUMBER                                                                                                                               ",ORIGINAL_INVOICE_NUMBER
+ATTRIBUTE15,Flexfield,POSITION,2449,2598,150,CHAR,Trailing Space Padded (Left Aligned),"WEB_PO_NUMBER                                                                                                                                         ",WEB_PO_NUMBER
+GLOBAL_ATTRIBUTE1,Flexfield,POSITION,2599,2748,150,CHAR,Trailing Space Padded (Left Aligned),"FORM_NUMBER                                                                                                                                           ",FORM_NUMBER
+ATTRIBUTE12,Flexfield,POSITION,2749,2898,150,CHAR,Trailing Space Padded (Left Aligned),"RGA_NUMBER                                                                                                                                            ",RGA_NUMBER
+SALES_ORDER,Order Info,POSITION,2899,3048,150,CHAR,Trailing Space Padded (Left Aligned),"CUSTOMER_PO_NUMBER                                                                                                                                    ",CUSTOMER_PO_NUMBER
+ATTRIBUTE10,Flexfield,POSITION,3049,3148,100,CHAR,Trailing Space Padded (Left Aligned),"ATTRIBUTE10                                                                                         ",ATTRIBUTE10
+ATTRIBUTE11,Flexfield,POSITION,3149,3248,100,CHAR,Trailing Space Padded (Left Aligned),"ATTRIBUTE11                                                                                         ",ATTRIBUTE11
+CM_TERM_NAME,Credit Memo,POSITION,3249,3263,15,CHAR,Trailing Space Padded (Left Aligned),"IMMEDIATE      ",IMMEDIATE
+CM_TRANSACTION_TYPE,Credit Memo,POSITION,3264,3283,20,CHAR,Trailing Space Padded (Left Aligned),"Credit Memo         ",Credit Memo
+DM_TRANSACTION_TYPE,Debit Memo,POSITION,3284,3303,20,CHAR,Trailing Space Padded (Left Aligned),"Debit Memo",Debit Memo
+
+

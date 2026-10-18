@@ -1,238 +1,709 @@
 'use strict';
-let st=null, pid=null, active='workspace', current=1, pageNumber=1, gridPage=1, grid=null, draftAllowed=false;
-let selectedRows=new Set(), cellBusy=false, repairOffset=0, repairTotal=0;
-let samples=[], aiStatus=null;
-const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const dot=s=>String(s??'').replace(/ /g,'·').replace(/\t/g,'→');
-const titles={workspace:'Workspace',schema:'CTL schema explorer',diagnostics:'DAT diagnostics',repairs:'Repair workspace',editor:'Spreadsheet data editor',bytes:'Byte inspector',export:'Generate & export',ai:'AI connection'};
-function show(message,error=false){const e=$('#notice');e.className='alert toast '+(error?'error':'success');e.textContent=typeof message==='string'?message:JSON.stringify(message)}
-function confirmAction(message){
-  return new Promise(resolve=>{const dialog=$('#confirmDialog');$('#confirmMessage').textContent=message;dialog.returnValue='cancel';dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal()});
+
+const $ = selector => document.querySelector(selector);
+const $$ = selector => Array.from(document.querySelectorAll(selector));
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clone = value => structuredClone(value);
+const columns = [
+  {key:'field_name',label:'Field Name',className:'frozen'},
+  {key:'id',label:'Field ID',className:'category-col'},
+  {key:'category_functional_group',label:'Category / Functional Group',className:'category-col'},
+  {key:'mapping_type',label:'Mapping Type',className:'mapping-col'},
+  {key:'start_pos',label:'Start Pos',className:'position-col'},
+  {key:'end_pos',label:'End Pos',className:'position-col'},
+  {key:'length',label:'Length',className:'length-col'},
+  {key:'datatype_conversion',label:'Data Type / Oracle Conversion Function',className:'conversion-col'},
+  {key:'padding_alignment',label:'Padding / Alignment Rule',className:'padding-col'},
+  {key:'raw_sample',label:'Raw Sample Value in DAT File (Quoted)',className:'sample-col'},
+  {key:'cleansed_output',label:'Cleansed Output in Oracle Staging Table',className:'sample-col'},
+  {key:'sequence',label:'Sequence',className:'position-col'},
+  {key:'record_type',label:'Record Type',className:'category-col'},
+  {key:'mandatory',label:'Mandatory',className:'position-col'},
+  {key:'alignment',label:'Alignment',className:'category-col'},
+  {key:'padding_byte',label:'Padding Byte',className:'position-col'},
+  {key:'padding_direction',label:'Padding Direction',className:'category-col'},
+  {key:'format',label:'Format',className:'category-col'},
+  {key:'allowed_values',label:'Allowed Values',className:'sample-col'},
+  {key:'conditional_rules',label:'Conditional Rules',className:'sample-col'},
+  {key:'description',label:'Description',className:'sample-col'},
+  {key:'remarks',label:'Remarks',className:'sample-col'},
+  {key:'source_reference',label:'Source Reference',className:'category-col'}
+];
+let state = null;
+let projectId = null;
+let stage = 'upload';
+let draftFields = [];
+let draftOptions = {};
+let draftLayouts = [];
+let specDirty = false;
+let valueEdits = new Map();
+let busy = false;
+let pollTimer = null;
+let selectedFieldId = null;
+let pendingFocus = null;
+let batchState = null;
+let batchSpecId = null;
+let batchSpecDraft = null;
+let batchSpecDirty = false;
+let batchSpecEditing = false;
+let batchDatId = null;
+let batchRecords = [];
+let batchRecord = null;
+let batchRecordDetail = null;
+let batchOffset = 0;
+let batchTotal = 0;
+let batchFieldId = null;
+let batchRuleIndex = null;
+
+function notify(message, error = false) {
+  $('#notice').className = `notice${error ? ' error' : ''}`;
+  $('#noticeText').textContent = message;
 }
-function fail(e){show(e.message||String(e),true)}
-async function request(path,options={}){
-  const r=await fetch(path,{...options,headers:{'X-Studio-Request':'1',...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...options.headers}});
-  if(!r.ok){let d;try{d=await r.json()}catch{};if(r.status===409&&pid) refresh().catch(()=>{});throw Error(typeof d?.detail==='string'?d.detail:JSON.stringify(d?.detail||`HTTP ${r.status}`))}
-  return r.json();
+function errorMessage(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(x => x.msg || x.message || 'Review the entered values.').join(' ');
+  return detail?.message || detail?.error || 'The action could not be completed. Review your files and try again.';
 }
-const api=path=>`/api/projects/${encodeURIComponent(pid)}${path}`;
-function requireProject(){if(!pid||!st?.loaded)throw Error('Import a CTL and DAT into a project first')}
-async function mutate(path,body,method='POST'){requireProject();st=await request(api(path),{method,body:JSON.stringify({version:st.project.version,...body})});render();if(active==='repairs')await loadProposals();return st}
-function switchPage(name){if(!st?.loaded&&!['workspace','ai'].includes(name)){show('Choose a practice case or import your CTL + DAT to begin.');name='workspace'}active=name;$$('.nav').forEach(x=>x.classList.toggle('active',x.dataset.page===name));$$('.section').forEach(x=>x.classList.toggle('active',x.id===name));$('#pageTitle').textContent=titles[name];if(name==='editor'&&st?.loaded)loadGrid().catch(fail);if(name==='repairs'&&st?.loaded)loadProposals().catch(fail);if(name==='ai')loadAIStatus().catch(fail);window.scrollTo(0,0)}
-async function refresh(n=current){if(!pid)return;const q=new URLSearchParams({record:n,page:pageNumber,page_size:50,search:$('#recordSearch').value,record_type:$('#typeFilter').value,status:$('#statusFilter').value,sort:$('#sortFilter').value});st=await request(api('/state?'+q));current=st.record_num||1;pageNumber=st.pagination?.page||1;render()}
-function render(){
-  $('#projectName').textContent=st?.project?.name||'No project selected';
-  $('#sessionBadge').textContent=st?.project?`PROJECT VERSION ${st.project.version}`:'DETERMINISTIC ENGINE READY';
-  $$('.nav').forEach(x=>x.disabled=!st?.loaded&&!['workspace','ai'].includes(x.dataset.page));
-  $('#uploadButton').disabled=!!st?.loaded;
-  $('.stats').classList.toggle('hidden',!st?.loaded);
-  renderExercise();
-  if(!st?.loaded){
-    for(const id of ['sBranches','sRecords','sIssues','sHash'])$('#'+id).textContent='—';
-    $('#properties').className='empty';$('#properties').textContent='Import a CTL and DAT to inspect file properties.';
-    for(const id of ['schemaContent','diagnosticCounts','recordList','pageIndex','recordIssues','fieldSummary','repairList','repairIndex','sheetMapping','reconciliation','sheetPreview','gridHead','gridBody','gridIndex','editorValidation','byteMeta','byteCurrent','byteOriginal','byteFields','exportState','history','aiResult'])$('#'+id).replaceChildren();
-    grid=null;if(!['workspace','ai'].includes(active))switchPage('workspace');return;
+async function request(path, options = {}) {
+  const response = await fetch(path, {...options, headers:{'X-Studio-Request':'1', ...(options.body instanceof FormData ? {} : {'Content-Type':'application/json'}), ...options.headers}});
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 401) {
+      $('#loginPanel').classList.remove('hidden');
+      $('#application').classList.add('hidden');
+    }
+    if (response.status === 409) throw Error(`${errorMessage(body?.detail || body)} Your unsaved changes are preserved.`);
+    throw Error(errorMessage(body?.detail || body));
   }
-  current=st.record_num;const d=st.diagnosis;
-  const layout=$('#layoutBranch').value;$('#layoutBranch').innerHTML='<option value="">Matched destinations</option>'+st.schema.branches.map((b,i)=>`<option value="${i}" ${String(i)===layout?'selected':''}>Assume branch ${i+1} · ${esc(b.table)}</option>`).join('');
-  $('#sBranches').textContent=d.branch_count;$('#sRecords').textContent=d.record_count;$('#sIssues').textContent=d.records_with_findings;$('#sHash').textContent=d.sha256.slice(0,14)+'…';
-  $('#properties').className='';$('#properties').innerHTML=`<p><strong>${esc(st.project.name)}</strong></p><div class="report-line">${d.byte_length.toLocaleString()} bytes · ${d.record_count.toLocaleString()} records</div><div class="report-line">Encoding: ${esc(d.encoding)} · ${esc(d.record_format)}</div><div class="report-line">Line endings: ${esc(d.line_endings.join(', '))}</div><div class="report-line">Original SHA-256 <code>${esc(st.original_checksum)}</code></div><p>${st.modified?'Working bytes contain approved edits.':'Working bytes match the uploaded source.'}</p>`;
-  $('#uploadButton').disabled=!!st.loaded;
-  renderSchema();renderDiagnostics();renderRepairs();renderSheet();renderBytes();renderExport();renderAI();
-  $('#undo').disabled=!st.undo_count;$('#redo').disabled=!st.redo_count;
-  if(!$('#weights').children.length)$('#weights').innerHTML=Object.entries(st.weights).map(([k,v])=>`<label>${esc(k)}<input type="number" data-weight="${esc(k)}" min="0" max="1" step="0.05" value="${v}"></label>`).join('');
+  return body;
 }
-function renderSchema(){
-  $('#schemaContent').className='';$('#schemaContent').innerHTML=`<div class="alert ${st.schema.compatibility==='fully_supported'?'success':''}">${esc(st.schema.compatibility.replaceAll('_',' '))} · ${esc(st.schema.mode)} · ${esc(st.schema.record_format)} ${st.schema.record_length||''}</div>${st.schema.diagnostics.map(x=>`<div class="issue">${esc(x)}</div>`).join('')}`+st.schema.branches.map((b,i)=>{
-    const segments=[...b.fields.filter(f=>f.start).map(f=>({...f,label:f.name})),...b.unmapped_intervals.map(g=>({...g,label:'Unmapped',gap:true}))].sort((a,b)=>a.start-b.start);
-    return `<div class="panel"><div class="flex"><h3>${i+1}. ${esc(b.table)}</h3><span class="pill neutral">CTL line ${b.source.line}</span></div><p class="mono">${b.when?'WHEN '+esc(b.when):'Unconditional destination'} · ${esc(b.mode)}</p>${b.unsupported.map(x=>`<div class="issue">${esc(x)}</div>`).join('')}<div class="byte-map" aria-label="Byte position map">${segments.map(x=>`<button class="${x.gap?'gap':''}" data-schema-field="${esc(x.label)}" title="Bytes ${x.start}–${x.end}">${esc(x.label)}<br>${x.start}–${x.end}</button>`).join('')}</div><div class="scroller"><table><thead><tr><th>Field / declaration</th><th>Byte range</th><th>Width</th><th>Datatype</th><th>Null / default / transformation</th></tr></thead><tbody>${b.fields.map(f=>`<tr><td><strong>${esc(f.name)}</strong> ${esc(f.filler)}<div class="field-rule" title="${esc(f.source.declaration)}">CTL line ${f.source.line}</div></td><td>${f.start?f.start+'–'+f.end:'Generated'}</td><td>${f.width}</td><td>${esc(f.dtype)} ${esc(f.date_mask)}</td><td class="field-rule">${f.constant!==null?'CONSTANT '+esc(f.constant):''}${f.nullif?'NULLIF '+esc(f.nullif):''}${f.defaultif?'<br>DEFAULTIF '+esc(f.defaultif):''}${f.sql_expression?'<br>SQL: '+esc(f.sql_expression):''}</td></tr>`).join('')}</tbody></table></div></div>`;
+const projectPath = suffix => `/api/projects/${encodeURIComponent(projectId)}/studio${suffix}`;
+function requireProject() { if (!projectId || !state) throw Error('Upload a specification and DAT file first.'); }
+function confirmAction(message) {
+  return new Promise(resolve => {
+    const dialog = $('#confirmDialog');
+    $('#confirmMessage').textContent = message;
+    dialog.returnValue = 'cancel';
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), {once:true});
+    dialog.showModal();
+  });
+}
+function applyState(next) {
+  state = next.state || next;
+  projectId = state.project.id;
+  if (!specDirty) {
+    draftFields = clone(state.spec?.fields || []);
+    draftOptions = clone(state.spec?.options || {});
+    draftLayouts = clone(state.spec?.layouts || []);
+  }
+  render();
+  schedulePoll();
+}
+async function action(path, payload = {}, method = 'POST') {
+  requireProject();
+  const next = await request(projectPath(path), {method, body:JSON.stringify({version:state.project.version, ...payload})});
+  applyState(next);
+  await listProjects();
+  return state;
+}
+async function withBusy(button, label, work) {
+  if (busy) return;
+  busy = true;
+  $('#newProjectButton').disabled = true;
+  const previous = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = label; }
+  try { return await work(); }
+  catch (error) { notify(error.message, true); }
+  finally { busy = false; if (button) button.textContent = previous; render(); }
+}
+function activeJobs() { return (state?.jobs || []).filter(job => ['queued','running','retry_wait'].includes(job.status)); }
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!projectId || !activeJobs().length) return;
+  pollTimer = setTimeout(async () => {
+    try {
+      const record = state.review?.record?.number || 1;
+      const next = await request(projectPath(`?record=${record}`));
+      applyState(next);
+    } catch (error) {
+      notify(`Could not refresh analysis progress. ${error.message}`, true);
+      pollTimer = setTimeout(schedulePoll, 5000);
+    }
+  }, 2200);
+}
+async function refreshProject(record = state?.review?.record?.number || 1) {
+  requireProject();
+  const next = await request(projectPath(`?record=${record}`));
+  applyState(next);
+}
+async function listProjects() {
+  const projects = await request('/api/projects');
+  $('#projectList').innerHTML = projects.length ? projects.map(project => `<button class="project-link ${project.id === projectId ? 'active' : ''}" data-open-project="${esc(project.id)}">${esc(project.name)}<small>Saved · version ${esc(project.version)}</small></button>`).join('') : '<p class="sidebar-note">Your saved reviews will appear here.</p>';
+}
+async function openProject(id) {
+  if ((specDirty || valueEdits.size || batchSpecDirty) && !await confirmAction('Leave your unsaved changes and open this saved project?')) return;
+  specDirty = false; valueEdits.clear(); batchSpecDirty = false; batchSpecEditing = false; batchState = null; batchSpecId = null; batchSpecDraft = null; batchDatId = null; batchRecords = []; batchRecordDetail = null;
+  const next = await request(`/api/projects/${encodeURIComponent(id)}/studio`);
+  applyState(next);
+  await loadBatch();
+  setStage(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length ? 'batch' : state.spec?.approved ? 'dat' : state.document ? 'spec' : 'upload');
+  if(state.stage==='legacy')notify(state.notice||'This saved project uses the Advanced CTL workstation. Open it from the navigation link.');
+  await listProjects();
+}
+function setStage(next) {
+  if (next === 'batch') { stage = next; render(); window.scrollTo({top:0,behavior:'smooth'}); return; }
+  if (next !== 'upload' && !state?.document) { notify('Upload the specification and original DAT to begin.'); return; }
+  if (next === 'spec' && valueEdits.size) { notify('Save your DAT value changes before editing the specification.'); return; }
+  if (next === 'dat' && (!state?.spec?.approved || specDirty)) { notify('Approve the reviewed specification before analyzing DAT values.'); return; }
+  stage = next;
+  render();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function issueText(issue) { return typeof issue === 'string' ? issue : issue.message || issue.reason || issue.code || 'Review this item.'; }
+function fieldIssues(field) {
+  return (state?.spec?.issues || []).filter(issue => typeof issue !== 'string' && (issue.field_id === field.id || issue.field === field.id || issue.field === field.field_name));
+}
+function reviewField(id) { return state?.review?.record?.fields?.find(field => field.id === id); }
+function currentValue(field) {
+  const key = `${state.review.record.number}:${field.id}`;
+  return valueEdits.has(key) ? valueEdits.get(key).value : field.value ?? '';
+}
+function render() {
+  $('#projectTitle').textContent = state?.project?.name || 'Prepare a DAT file for import';
+  $('#pageSubtitle').textContent = stage === 'batch' ? 'Review files, approve rules, and inspect each record before export.' : stage === 'upload' ? 'Review your specification and correct values without counting spaces.' : stage === 'spec' ? 'Your approved specification controls how the file is formatted and checked.' : 'Review actual values beside the approved specification. Padding is handled for you.';
+  $('#saveStatus').textContent = specDirty || valueEdits.size ? 'Unsaved changes' : state ? `Saved · version ${state.project.version}` : 'No project selected';
+  $('#saveStatus').className = `status-tag ${specDirty || valueEdits.size ? 'dirty' : state ? 'saved' : ''}`;
+  $$('[data-stage]').forEach(button => {
+    const target = button.dataset.stage;
+    button.classList.toggle('active', target === stage);
+    button.classList.toggle('current', target === stage);
+    button.classList.toggle('complete', target === 'upload' && !!state?.document || target === 'spec' && !!state?.spec?.approved);
+    button.disabled = busy || target !== 'upload' && target !== 'batch' && !state?.document || target === 'dat' && (!state?.spec?.approved || specDirty);
+    if (button.classList.contains('stage-step')) button.setAttribute('aria-current', target === stage ? 'step' : 'false');
+  });
+  $('#uploadStage').classList.toggle('hidden', stage !== 'upload');
+  $('#reviewStage').classList.toggle('hidden', stage === 'upload' || stage === 'batch');
+  $('#batchStage').classList.toggle('hidden', stage !== 'batch');
+  renderProvider(); renderJobs(); renderSources();
+  if (stage === 'batch') renderBatch();
+  if (stage === 'spec' || stage === 'dat') { renderReviewStatus(); renderFileRules(); renderTable(); renderFieldContext(); renderSummary(); renderGeneration(); }
+  renderButtons();
+}
+const batchPath = suffix => projectPath(`/batch${suffix}`);
+function acceptBatch(next) {
+  batchState = next;
+  if (state?.project && next.project) state.project = next.project;
+  const specs = next.batch?.specs || [];
+  if (!specs.some(spec => spec.id === batchSpecId)) { batchSpecId = specs[0]?.id || null; batchSpecDraft = null; batchSpecDirty = false; batchSpecEditing = false; }
+  const dats = next.batch?.dats || [];
+  if (!dats.some(dat => dat.id === batchDatId)) { batchDatId = dats[0]?.id || null; batchRecords = []; batchRecord = null; batchRecordDetail = null; batchOffset = 0; batchTotal = 0; }
+  render();
+}
+async function loadBatch() {
+  if (!projectId) return;
+  acceptBatch(await request(batchPath('')));
+}
+async function batchAction(path, payload = {}, method = 'POST') {
+  if (!batchState) throw Error('Open a batch project first.');
+  const next = await request(batchPath(path), {method,body:JSON.stringify({version:batchState.project.version,...payload})});
+  acceptBatch(next);
+  await listProjects();
+  return next;
+}
+function chosenBatchSpec() { return (batchState?.batch?.specs || []).find(spec => spec.id === batchSpecId); }
+function renderBatch() {
+  const batch = batchState?.batch;
+  $('#batchWorkspace').classList.toggle('hidden', !batch || !(batch.specs?.length || batch.dats?.length));
+  $('#batchUploadButton').disabled = !!state?.document || busy;
+  $('#batchProjectName').value = state?.project?.name || $('#batchProjectName').value;
+  $('#batchProjectName').disabled = !!projectId;
+  if (!batch) return;
+  const specs = batch.specs || [], dats = batch.dats || [], associations = batch.associations || [];
+  const summary = batch.summary || {};
+  $('#batchSummary').innerHTML = [[specs.length,'Specifications',''],[dats.length,'DAT files',''],[summary.records ?? summary.record_count ?? '—','Records',''],[summary.unvalidated ?? summary.blocked ?? '—','Unvalidated','warning']].map(([value,label,tone]) => `<div class="summary-card ${tone}"><strong>${esc(value)}</strong><small>${esc(label)}</small></div>`).join('');
+  $('#batchSpecList').innerHTML = specs.map(spec => `<div class="batch-file-row"><button class="batch-file ${spec.id===batchSpecId?'selected':''}" type="button" data-batch-spec="${esc(spec.id)}"><strong>${esc(spec.name)}</strong><span class="pill ${spec.approved?'good':'warn'}">${spec.approved?'Approved':'Needs approval'}</span><small>Version ${esc(spec.version)} · ${(spec.fields||[]).length} fields · ${(spec.layouts||[]).length} layouts · ${esc(spec.ai_status||'AI not run')}</small></button><button class="secondary compact" type="button" data-batch-spec-source="${esc(spec.id)}">Original</button></div>`).join('') || '<p class="annotation">Upload a CSV or Excel specification.</p>';
+  $('#batchSpecSelect').innerHTML = specs.map(spec => `<option value="${esc(spec.id)}"${spec.id===batchSpecId?' selected':''}>${esc(spec.name)} · v${esc(spec.version)}</option>`).join('');
+  const spec = chosenBatchSpec();
+  if (!batchSpecDirty) batchSpecDraft = spec ? clone(spec) : null;
+  const unknownMandatory = (batchSpecDraft?.fields||[]).filter(field=>field.mandatory==='UNKNOWN'&&['physical','filler'].includes(field.rules?.mapping_type)).length;
+  $('#batchSpecStatus').className = `review-status${spec?.approved&&!batchSpecDirty&&!batchSpecEditing?' approved':''}`;
+  $('#batchSpecStatus').innerHTML = !spec ? 'Add a specification to begin.' : `<strong>${batchSpecDirty?'Unsaved specification changes':batchSpecEditing?'Revising approved specification; saving requires a new approval':spec.approved?'Approved specification':'Review every field and routing condition before approval'}</strong><p>${unknownMandatory} Unknown mandatory fields · ${(spec.coverage_limitations||[]).length} coverage limitations. ${unknownMandatory?'Acknowledgment does not make these rules fully verified.':''}</p><p>${esc((spec.issues||[]).map(issueText).slice(0,4).join(' · ') || 'Review the source and routing conditions before approval.')}</p>`;
+  $('#batchSaveSpec').disabled = !spec || !batchSpecDirty || busy;
+  $('#batchEditSpec').classList.toggle('hidden', !spec?.approved || batchSpecEditing);
+  $('#batchApproveSpec').disabled = !spec || batchSpecDirty || spec.approved || busy;
+  $('#batchAckUnknown').checked = batchSpecDraft?.options?.acknowledge_unknown_mandatory === true;
+  $('#batchAckUnknown').disabled = !spec || !!spec.approved && !batchSpecEditing;
+  const locked = spec?.approved && !batchSpecEditing;
+  $('#batchLayoutRules').innerHTML = (batchSpecDraft?.layouts||[]).map((layout,index) => `<details class="layout-rule"><summary>${esc(layout.name||layout.id)} · ${esc(layout.record_length||'unknown')} bytes · ${(layout.field_ids||[]).length} fields</summary><div class="routing-conditions">${(layout.when||[]).map((condition,j) => `<label>Bytes <input type="number" min="1" data-batch-layout="${index}" data-batch-condition="${j}" data-batch-key="start" value="${esc(condition.start)}" ${locked?'disabled':''}> through <input type="number" min="1" data-batch-layout="${index}" data-batch-condition="${j}" data-batch-key="end" value="${esc(condition.end)}" ${locked?'disabled':''}> equal <input data-batch-layout="${index}" data-batch-condition="${j}" data-batch-key="equals" value="${esc(condition.equals)}" ${locked?'disabled':''}></label>`).join('') || '<p class="annotation">No condition: matches any record. Add an explicit record identifier before using multiple layouts.</p>'}</div>${locked?'':`<button class="secondary compact" type="button" data-batch-add-condition="${index}">Add condition</button>`}</details>`).join('');
+  $('#batchSpecTable thead').innerHTML = `<tr>${columns.map(column => `<th scope="col">${esc(column.label)}</th>`).join('')}</tr>`;
+  $('#batchSpecTable tbody').innerHTML = (batchSpecDraft?.fields||[]).map((field,index) => `<tr>${columns.map(column => `<td>${column.key==='id'?esc(field.id):column.key==='mandatory'?`<select data-batch-field="${index}" data-batch-column="mandatory" aria-label="Mandatory for ${esc(field.field_name)}" ${locked?'disabled':''}><option value="UNKNOWN"${field.mandatory==='UNKNOWN'?' selected':''}>Unknown</option><option value="YES"${field.mandatory==='YES'?' selected':''}>Yes</option><option value="NO"${field.mandatory==='NO'?' selected':''}>No</option></select>`:`<textarea class="spec-input" data-batch-field="${index}" data-batch-column="${column.key}" aria-label="${esc(column.label)} for ${esc(field.field_name)}" rows="2" ${locked?'disabled':''}>${esc(field[column.key]??'')}</textarea>`}${column.key==='field_name'?`<button class="field-detail-button" type="button" data-batch-rule-index="${index}" ${locked?'disabled':''}>Rules & source ↗</button>`:''}</td>`).join('')}</tr>`).join('');
+  $('#batchFileList').innerHTML = dats.map(dat => `<div class="batch-file-row"><button class="batch-file ${dat.id===batchDatId?'selected':''}" type="button" data-batch-dat="${esc(dat.id)}"><strong>${esc(dat.name)}</strong><span class="pill ${dat.export_eligible?'good':'warn'}">${esc(dat.status||'Unprocessed')}</span><small>${esc(dat.record_count ?? '—')} records · ${esc(dat.summary?.validated_count??0)} deterministic passed · ${esc(dat.summary?.unvalidated_count??0)} unresolved · AI ${esc(dat.summary?.ai_status||'not run')} · SHA-256 ${esc((dat.sha256||'').slice(0,16))}…</small></button><button class="secondary compact" type="button" data-batch-original="${esc(dat.id)}">Original</button><button class="secondary compact" type="button" data-batch-download="${esc(dat.id)}" ${dat.export_eligible?'':'disabled'}>Download DAT</button></div>`).join('') || '<p class="annotation">Upload at least one DAT file.</p>';
+  $('#batchAssociations').innerHTML = dats.map(dat => `<fieldset class="batch-association"><legend>${esc(dat.name)}</legend>${specs.map(spec => `<div><strong>${esc(spec.name)} · v${esc(spec.version)}</strong>${(spec.layouts||[]).map(layout => {const checked=associations.some(item=>item.dat_id===dat.id&&item.spec_id===spec.id&&(item.layout_ids||[]).includes(layout.id));return `<label class="checkbox-label"><input type="checkbox" data-batch-dat-id="${esc(dat.id)}" data-batch-spec-id="${esc(spec.id)}" data-batch-layout-id="${esc(layout.id)}" ${checked?'checked':''} ${spec.approved?'':'disabled'}> ${esc(layout.name||layout.id)}${spec.approved?'':' · approve first'}</label>`;}).join('')||'<p class="annotation">No layouts defined.</p>'}</div>`).join('')}</fieldset>`).join('');
+  $('#batchSaveAssociations').disabled = !dats.length || busy;
+  $('#batchProcess').disabled = !dats.length || busy;
+  $('#batchAi').disabled = !summary.records || busy;
+  $('#batchGenerate').disabled = !dats.some(dat=>dat.summary?.unvalidated_count===0&&dat.summary?.ai_status==='reviewed') || busy;
+  $('#batchDownloadArchive').disabled = !dats.some(dat=>dat.export_eligible) || busy;
+  $('#batchExportNote').textContent = `${dats.filter(dat=>dat.export_eligible).length} of ${dats.length} DAT files are eligible for export. The archive includes only eligible files and a manifest naming blocked files.${(summary.blocked_files||[]).length?' Blocked: '+summary.blocked_files.map(item=>`${dats.find(dat=>dat.id===item.dat_id)?.name||item.dat_id}: ${item.reason}`).join(' · '):''}`;
+  renderBatchRecords();
+}
+function renderBatchRecords() {
+  $('#batchRecordList').innerHTML = batchRecords.length ? batchRecords.map((record,index) => `<button class="batch-file ${batchRecord===index?'selected':''}" type="button" data-batch-record="${index}"><strong>Record ${esc(record.number??index+1)}</strong><span class="pill ${record.status==='validated'?'good':'warn'}">${record.status==='validated'?'Deterministic passed':esc(record.status||'Unvalidated')}</span><small>${esc(record.layout_id||'No layout')} · ${esc(record.spec_id||'No specification')} · AI ${esc(record.ai_status||'not run')} · ${(record.issues||[]).length} findings</small></button>`).join('') : '<p class="annotation">Select a DAT file, then analyze the batch to inspect its records.</p>';
+  $('#batchRecordRange').textContent = batchTotal ? `${batchOffset+1}–${batchOffset+batchRecords.length} of ${batchTotal}` : 'No processed records';
+  $('#batchPreviousRecords').disabled = batchOffset===0;
+  $('#batchNextRecords').disabled = batchOffset+batchRecords.length>=batchTotal;
+  const record = batchRecordDetail;
+  const field = (record?.fields||[]).find(item=>item.id===batchFieldId);
+  $('#batchRecordEvidence').innerHTML = record ? `<div class="evidence-row"><strong>Routing</strong><p>${esc(record.routing_status||record.status||'Unvalidated')} · specification ${esc(record.spec_id||'none')} · version ${esc(record.spec_version??'—')} · layout ${esc(record.layout_id||'none')}</p></div><div class="evidence-row"><strong>Validation</strong><p>${esc(record.validation_status||record.status||'Unvalidated')} · AI ${esc(record.ai_status||'not run')}</p>${(record.issues||[]).map(issue=>`<p class="issue-text">${esc(issueText(issue))}</p>`).join('')}</div><div class="evidence-row"><strong>Alignment</strong><p>${esc(record.alignment?.status||'Not analyzed')}</p>${(record.alignment?.candidates||[]).slice(0,5).map(candidate=>`<p>${esc(candidate.id)} · score ${esc(candidate.score??'—')} · ${candidate.certified?'certified':'review required'}</p>`).join('')}</div><div class="evidence-row"><strong>AI audit</strong><p>${esc(record.ai_review?.summary||'No completed AI audit for this record.')}</p>${(record.ai_review?.findings||[]).map(item=>`<p class="issue-text">${esc(item.field_id)} · ${esc(item.reason||item.message||item.code||'Review finding')}</p>`).join('')}${record.ai_status==='needs_review'?`<label>Disposition<select id="batchAiDecision"><option value="reject">Reject AI advice</option><option value="accept">Accept for review</option><option value="dismiss">Dismiss with reason</option><option value="resolve">Resolved through specification revision</option></select></label><label>Reason<input id="batchAiReason" minlength="3" placeholder="Explain your review decision"></label><button class="secondary compact" id="batchSaveAiDecision" type="button">Save AI review decision</button><p class="annotation">This records your decision. AI cannot change original values or override deterministic validation.</p>`:''}</div><div class="evidence-row"><strong>Byte provenance</strong><p>${record.byte_preserved?'Original record bytes retained':'Certified structural correction applied; inspect alignment ledger.'}</p><code>Original SHA-256: ${esc(record.original_sha256||'—')}\nOutput SHA-256: ${esc(record.output_sha256||'—')}</code></div><div class="evidence-row"><strong>Fields</strong>${(record.fields||[]).map(item=>`<button type="button" class="batch-file ${item.id===batchFieldId?'selected':''}" data-batch-field-evidence="${esc(item.id)}">${esc(item.field_name||item.id)} · ${esc(item.status||'unvalidated')}</button>`).join('')||'<p>Field evidence unavailable for this record.</p>'}</div>${field?`<div class="evidence-row"><strong>${esc(field.field_name||field.id)}</strong><code>Original: ${esc(field.original_value??'—')}\nWorking: ${esc(field.value??'—')}\nOriginal bytes: ${esc(field.original_bytes_hex||'—')}</code>${(field.issues||[]).map(issue=>`<p class="issue-text">${esc(issueText(issue))}</p>`).join('')}</div>`:''}` : 'Select a record to inspect its routing, validation, and source evidence.';
+  if (record?.correction && batchDatId) {
+    const link = document.createElement('a');
+    link.href = batchPath(`/provenance/${encodeURIComponent(batchDatId)}/${record.number}`);
+    link.textContent = 'Download byte-level correction provenance';
+    link.download = `provenance-${record.number}.json`;
+    link.className = 'source-download';
+    $('#batchRecordEvidence').append(link);
+  }
+}
+async function loadBatchRecords() {
+  if (!batchDatId) return;
+  const response = await request(batchPath(`/records/${encodeURIComponent(batchDatId)}?offset=${batchOffset}&limit=100`));
+  batchRecords = response.records || response.items || [];
+  batchTotal = response.total || 0;
+  batchRecord = null;
+  batchRecordDetail = null;
+  batchFieldId = null;
+  renderBatchRecords();
+}
+async function selectBatchRecord(index) {
+  const response = await request(batchPath(`/records/${encodeURIComponent(batchDatId)}?offset=${batchOffset+index}&limit=1`));
+  batchRecord = index;
+  batchRecordDetail = response.records?.[0] || null;
+  batchFieldId = null;
+  renderBatchRecords();
+}
+function openBatchRules(index) {
+  const field=batchSpecDraft?.fields?.[index];if(!field)return;
+  batchRuleIndex=index;
+  const rules=field.rules||{}, option=(values,current)=>values.map(value=>`<option value="${esc(value)}"${value===current?' selected':''}>${esc(value)}</option>`).join('');
+  $('#batchRuleTitle').textContent=field.field_name||field.id;
+  $('#batchRuleContent').innerHTML=`<div class="rule-grid"><label>Mapping type<select id="batchRuleMapping">${option(['physical','filler','constant','system'],rules.mapping_type||'physical')}</select></label><label>Value type<select id="batchRuleDatatype">${option(['char','integer','decimal','float','date','unknown'],rules.datatype||'unknown')}</select></label><label>Conversion<select id="batchRuleConversion">${option(['identity','trim','rtrim','ltrim','to_number','to_date','unsupported','database'],rules.conversion||'identity')}</select></label><label>Padding side<select id="batchRulePadding">${option(['right','left','none','unknown'],rules.padding?.side||'unknown')}</select></label><label>Padding byte<input id="batchRulePadChar" maxlength="1" value="${esc(rules.padding?.char??' ')}"></label><label>Date format<input id="batchRuleDateFormat" value="${esc(rules.date_format||'')}"></label><label>Explicit constant<input id="batchRuleConstant" value="${esc(rules.constant??'')}"></label><label>Allowed values, one per line<textarea id="batchRuleAllowed" rows="3">${esc((rules.allowed_values||[]).join('\n'))}</textarea></label><label>Mandatory<select id="batchRuleMandatory">${option(['UNKNOWN','YES','NO'],field.mandatory||'UNKNOWN')}</select></label><label class="checkbox-label"><input id="batchRuleInternalSpaces" type="checkbox" ${rules.allow_internal_whitespace!==false?'checked':''}> Allow internal spaces</label></div><div class="detail-section"><h3>Original source</h3><p>${esc(field.source_reference||'No source reference')}</p><code>${esc(JSON.stringify(field.source?.extra_columns||{}))}</code></div>`;
+  $('#batchRuleDialog').showModal();
+}
+function saveBatchRules() {
+  const field=batchSpecDraft?.fields?.[batchRuleIndex];if(!field)return;
+  const pad=$('#batchRulePadChar').value;
+  if(!/^[\x20-\x7e]$/.test(pad)){notify('Padding must be one printable ASCII byte.',true);return;}
+  const rules=field.rules||{};
+  Object.assign(rules,{mapping_type:$('#batchRuleMapping').value,datatype:$('#batchRuleDatatype').value,conversion:$('#batchRuleConversion').value,padding:{...(rules.padding||{}),side:$('#batchRulePadding').value,char:pad},date_format:$('#batchRuleDateFormat').value,constant:$('#batchRuleConstant').value,allowed_values:$('#batchRuleAllowed').value.split('\n').filter(Boolean),allow_internal_spaces:$('#batchRuleInternalSpaces').checked,allow_internal_whitespace:$('#batchRuleInternalSpaces').checked});
+  field.mandatory=$('#batchRuleMandatory').value;rules.required=field.mandatory==='YES'?true:field.mandatory==='NO'?false:null;field.rules=rules;
+  batchSpecDirty=true;$('#batchRuleDialog').close();renderBatch();
+}
+function renderProvider() {
+  const ai = state?.ai_status;
+  if (!ai) return;
+  $('#providerSummary').textContent = `Bedrock · ${ai.ai_available === false ? 'unavailable' : ai.model_id || 'not configured'}`;
+}
+function renderJobs() {
+  const latest = new Map();
+  for (const job of state?.jobs || []) if (!latest.has(job.kind)) latest.set(job.kind, job);
+  const jobs = [...latest.values()].filter(job => ['queued','running','retry_wait','failed'].includes(job.status));
+  $('#jobPanel').classList.toggle('hidden', !jobs.length);
+  $('#jobPanel').innerHTML = jobs.map(job => {
+    const running = ['queued','running','retry_wait'].includes(job.status);
+    const title = job.kind === 'dat' ? 'DAT analysis' : 'Specification interpretation';
+    const progress = job.total_batches ? ` · ${job.completed_batches || 0} of ${job.total_batches} groups complete` : '';
+    const label = {queued:'Queued',running:'In progress',retry_wait:'Waiting for provider',failed:'Needs attention'}[job.status] || job.status;
+    return `<div class="job-row ${job.status === 'failed' ? 'failed' : ''}">${running ? '<span class="spinner" aria-hidden="true"></span>' : '<span aria-hidden="true">!</span>'}<strong>${esc(title)} · ${esc(label)}${esc(progress)}</strong><span class="job-message">${esc(job.message || (job.status === 'queued' ? 'Your work is saved while this request waits.' : ''))}${job.error ? `<br><span class="job-error">${esc(errorMessage(job.error))}</span>` : ''}</span></div>`;
   }).join('');
 }
-function renderDiagnostics(){
-  const d=st.diagnosis,r=st.record,p=st.pagination;
-  $('#diagnosticCounts').innerHTML='<p>'+Object.entries(d.counts).filter(([,n])=>n).map(([k,n])=>`<span class="pill ${k==='valid'?'good':'bad'}">${n} ${esc(k.replaceAll('_',' '))}</span>`).join(' ')+'</p>';
-  $('#recordList').innerHTML=d.records.map(x=>`<tr class="clickable ${x.record===current?'selected':''}" data-select-record="${x.record}"><td>${x.record}</td><td class="mono">${esc(x.record_type)}</td><td>${x.length} / ${x.minimum_length||'?'}</td><td>${x.branches.map(b=>esc(b.table)).join(', ')||'Unmatched'}${x.uncertain_branches.length?'<br>Unevaluable: '+x.uncertain_branches.join(', '):''}</td><td><span class="pill ${x.status==='valid'?'good':'bad'}">${esc(x.classification.replaceAll('_',' '))}</span></td></tr>`).join('');
-  $('#pageIndex').textContent=`Page ${p.page} / ${p.pages} · ${p.total} matching records`;$('#prevPage').disabled=p.page<=1;$('#nextPage').disabled=p.page>=p.pages;
-  $('#recordTitle').textContent=`Selected record ${current} · ${r?.length||0} bytes · ${r?.line_ending||'none'}`;
-  $('#recordIssues').innerHTML=r?.issues.length?r.issues.map(x=>`<div class="issue">${esc(x)}</div>`).join(''):'<div class="alert success">No supported structural discrepancies detected.</div>';
-  $('#fieldSummary').innerHTML=r?`<div class="scroller"><table><thead><tr><th>Field</th><th>Position</th><th>Raw (spaces visible)</th><th>Interpreted value</th><th>State</th></tr></thead><tbody>${r.fields.map(f=>`<tr><td>${esc(f.name)}<div class="field-rule">${esc(f.table)}</div></td><td>${f.start}–${f.end}</td><td class="mono">${esc(dot(f.raw))}</td><td>${esc(f.value??'NULL')}</td><td>${f.modified?'Modified':'Source'} ${f.missing_bytes?`· ${f.missing_bytes} missing bytes`:''}</td></tr>`).join('')}</tbody></table></div>`:'';
+function renderSources() {
+  const document = state?.document;
+  $('#uploadedSources').classList.toggle('hidden', !document);
+  if (document) $('#uploadedSources').innerHTML = `<h2>Saved source files</h2><div class="source-summary"><div><strong>${esc(document.name || document.filename || 'Specification')}</strong><p>${state.spec?.fields?.length || 0} interpreted fields · original document preserved</p></div><div><strong>Original DAT</strong><p>${state.review?.record_count ?? 'Not yet analyzed'} physical records · edits do not alter the original</p></div></div><button class="secondary" data-stage="${state.spec?.approved ? 'dat' : 'spec'}">Continue review →</button>`;
 }
-async function loadProposals(){requireProject();const result=await request(api('/repair-proposals?'+new URLSearchParams({offset:repairOffset,limit:50,pending_only:$('#pendingOnly').checked})));repairTotal=result.total;if(repairOffset>=repairTotal&&repairOffset>0){repairOffset=Math.floor((Math.max(1,repairTotal)-1)/50)*50;return loadProposals()}st.proposals=result.proposals;renderRepairs()}
-function renderRepairs(){
-  $('#repairIndex').textContent=`${repairTotal} proposals · page ${Math.floor(repairOffset/50)+1} / ${Math.max(1,Math.ceil(repairTotal/50))}`;$('#repairPrev').disabled=repairOffset<=0;$('#repairNext').disabled=repairOffset+50>=repairTotal;
-  const proposals=st.proposals.filter(p=>!$('#pendingOnly').checked||['PENDING_REVIEW','PROPOSED'].includes(p.status));
-  $('#repairList').className='';$('#repairList').innerHTML=proposals.length?proposals.map(p=>{
-    const pending=['PENDING_REVIEW','PROPOSED'].includes(p.status);
-    return `<article class="panel proposal ${['BEDROCK','GROQ'].includes(p.source)?'ai':''}"><div class="flex"><h3>${pending?`<input type="checkbox" data-proposal="${esc(p.id)}" aria-label="Select proposal for record ${p.record}"> `:''}Record ${p.record} · ${esc(p.kind.replaceAll('_',' '))}${p.rank?' · rank '+p.rank:''}</h3><span class="pill ${['BEDROCK','GROQ'].includes(p.source)?'badge-ai':'neutral'}">${esc(p.source)} · ${esc(p.status)}</span></div><p>${esc(p.reason)}</p><div class="score-bars"><span>Score ${p.candidate_score} / 100</span>${Object.entries(p.score_breakdown||{}).map(([k,v])=>`<span>${esc(k)}: ${v.points.toFixed(1)} / ${(v.weight*100).toFixed(0)}</span>`).join('')}</div>${p.ambiguous?`<div class="issue">Ambiguous: ${p.candidate_count} valid candidates; top-score gap ${Number(p.score_separation).toFixed(2)}. Compare physical changes before approval.</div>`:''}${p.field?`<p><strong>${esc(p.field)}</strong> · bytes ${p.start}–${p.end}</p><div class="two"><div><label>Original value<pre>${esc(dot(p.original_value))}</pre></label></div><label>Proposed value${pending?`<input data-override="${esc(p.id)}" value="${esc(p.proposed_value)}" aria-label="Proposed value for ${esc(p.field)}">`:`<pre>${esc(dot(p.approved_value??p.proposed_value))}</pre>`}</label></div>`:''}<details><summary>Physical changes, evidence & destinations</summary>${p.changes?`<div class="scroller"><table><thead><tr><th>Field</th><th>Bytes</th><th>Before</th><th>After</th></tr></thead><tbody>${p.changes.map(c=>`<tr><td>${esc(c.field)}</td><td>${c.start}–${c.end}</td><td class="mono">${esc(dot(c.original))}</td><td class="mono">${esc(dot(c.proposed))}</td></tr>`).join('')}</tbody></table></div>`:''}<p>Evidence: ${p.evidence?.length?esc(p.evidence.map(e=>`${e.source_reference||e.source_type}: ${e.value??e.matched_value}`).join('; ')):'Structural constraints only; missing business values cannot be inferred.'}</p><p>Destinations after serialization: ${esc((p.destinations||[]).map(d=>d.table).join(', '))}</p>${p.expected_serialized_value?`<pre>${esc(dot(p.expected_serialized_value))}</pre>`:''}<p class="mono">Source record checksum: ${esc(p.record_checksum)}</p></details>${pending?`<div class="btnrow"><button class="primary" data-review="approve" data-id="${esc(p.id)}">Approve & apply</button><button class="secondary" data-review="reject" data-id="${esc(p.id)}">Reject</button><button class="secondary" data-goto-byte="${p.record}">Inspect bytes</button></div>`:''}</article>`;
-  }).join(''):'<div class="empty">No pending candidates. Unsupported or evidence-free damage may require manual investigation.</div>';
-}
-function renderSheet(){
-  const sh=st.spreadsheet;if(!sh.sheets?.length){$('#sheetMapping').innerHTML='<div class="notice">No supplementary sheet loaded.</div>';$('#sheetPreview').innerHTML='';$('#reconciliation').innerHTML='';return}
-  const previous=$('#sheetSelect')?.value;const selected=sh.sheets.find(s=>s.name===previous)||sh.sheets[0];
-  const role=$('#sheetRole')?.value||sh.role;
-  const fields=role==='field_specifications'?['FIELD_NAME','START','END','DATATYPE','TARGET_TABLE']:[...new Set(st.schema.branches.flatMap(b=>b.fields.filter(f=>f.start).map(f=>f.name)))].sort();
-  const specDefaults={FIELD_NAME:'FIELD_NAME',START_POS:'START',START:'START',END_POS:'END',END:'END',DATA_TYPE:'DATATYPE',DATATYPE:'DATATYPE',TARGET_TABLE:'TARGET_TABLE'};
-  const saved=st.reconciliation.sheet===selected.name?st.reconciliation.mapping:role==='field_specifications'?specDefaults:selected.suggested_mapping;
-  const keys=st.reconciliation.sheet===selected.name?st.reconciliation.keys:[];
-  $('#sheetMapping').innerHTML=`<div class="toolbar"><label>Worksheet<select id="sheetSelect">${sh.sheets.map(s=>`<option ${s.name===selected.name?'selected':''} value="${esc(s.name)}">${esc(s.name)} · ${s.row_count} rows · ${esc(s.kind)}</option>`).join('')}</select></label><label>Role<select id="sheetRole">${['reference_values','transaction_values','example_records','field_specifications'].map(r=>`<option ${r===role?'selected':''} value="${r}">${r.replaceAll('_',' ')}</option>`).join('')}</select></label></div><div class="mapping-row"><strong>Spreadsheet header</strong><strong>CTL field</strong><strong>Join key</strong></div>${selected.headers.map(h=>`<div class="mapping-row"><span>${esc(h)}</span><select data-map="${esc(h)}" aria-label="Map ${esc(h)}"><option value="">Ignore</option>${fields.map(f=>`<option value="${esc(f)}" ${saved?.[h]===f?'selected':''}>${esc(f)}</option>`).join('')}</select><label><input type="checkbox" data-key="${esc(h)}" ${role==='field_specifications'?'disabled':''} ${keys.includes(saved?.[h])?'checked':''}> Key</label></div>`).join('')}<div class="btnrow"><button class="primary" id="reconcile">Reconcile mapped values</button><span class="hint">Exact key matches only. Leading zeros remain significant.</span></div>`;
-  $('#sheetSelect').onchange=renderSheet;$('#sheetRole').onchange=renderSheet;$('#reconcile').onclick=()=>reconcileSheet().catch(fail);
-  $('#sheetPreview').innerHTML=`<p>${esc(sh.precision_policy)} · Header row ${selected.header_row}. Preview ${selected.rows.length} / ${selected.row_count} rows.</p>${(sh.warnings||[]).slice(0,5).map(w=>`<div class="issue">${esc(w)}</div>`).join('')}<div class="scroller"><table><thead><tr>${selected.headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${selected.rows.map(r=>`<tr>${selected.headers.map(h=>`<td title="${esc(r.references[h])}">${esc(r.values[h])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  const rec=st.reconciliation;
-  $('#reconciliation').innerHTML=rec.sheet?`<div class="alert ${rec.conflicts.length?'':'success'}">${rec.matched_records} matched records · ${rec.conflicts.length} conflicts in displayed result · ${rec.duplicate_keys.length} duplicate keys · ${rec.missing_supplement_records.length} records without a unique supplement match. Conflicts require approval in the repair queue.</div>${rec.spec_conflicts?.length?rec.spec_conflicts.map(x=>`<div class="issue">${esc(x.field)} · ${esc(x.source_reference)}: ${esc(x.issues.join('; '))}</div>`).join(''):''}${rec.duplicate_keys.length?`<pre>${esc(JSON.stringify(rec.duplicate_keys,null,2))}</pre>`:''}`:'';
-}
-async function reconcileSheet(){
-  const mapping={},keys=[];$$('[data-map]').forEach(e=>{if(e.value){mapping[e.dataset.map]=e.value;if($$('[data-key]').find(k=>k.dataset.key===e.dataset.map)?.checked)keys.push(e.value)}});
-  await mutate('/map-spreadsheet',{sheet:$('#sheetSelect').value,role:$('#sheetRole').value,mapping,keys});show('Reconciliation complete. Existing DAT values are preserved pending review.');
-}
-function renderAI(){const run=st.ai_runs.at(-1);$('#aiResult').innerHTML=run?`<div class="panel"><span class="pill badge-ai">${esc(run.provider||aiStatus?.provider||'AI')} · ${esc(run.capability)} · ${esc(run.result.status)}</span><p>${esc(run.result.summary)}</p>${run.result.observations.map(x=>`<div class="notice">${esc(x)}</div>`).join('')}${run.result.mappings.map(m=>`<div class="issue">${esc(m.sheet)} / ${esc(m.header)} → ${esc(m.field_name)}: ${esc(m.reason)} <button class="secondary" data-ai-map="${esc(m.header)}" data-ai-field="${esc(m.field_name)}" data-ai-sheet="${esc(m.sheet)}">Use mapping</button></div>`).join('')}<p class="small">Tokens: ${esc(run.usage.inputTokens??'?')} input / ${esc(run.usage.outputTokens??'?')} output · ${run.latency_ms} ms · ${run.estimated_cost_usd===null?'Cost unpriced':`Estimated $${run.estimated_cost_usd.toFixed(6)}`}</p></div>`:''}
-async function runAI(){requireProject();const capability=$('#aiCapability').value;const share_values=$('#shareValues').checked;if(share_values&&!await confirmAction(`Share fields and matching evidence for record ${current} with ${aiStatus?.provider||'your AI provider'} (${aiStatus?.model_id||'configured model'})?`))return;$('#runAI').disabled=true;try{const result=await request(api('/ai/recover'),{method:'POST',body:JSON.stringify({version:st.project.version,capability,record:current,share_values})});st=result.state;render();show(result.skipped?result.reason:'AI review saved. Any data modifications still require your approval.')}finally{$('#runAI').disabled=aiStatus?!aiStatus.ai_available:false}}
-async function review(ids,action){
-  if(!ids.length)throw Error('Select one or more proposals first');
-  const overrides={};ids.forEach(id=>{const input=$$('[data-override]').find(e=>e.dataset.override===id);if(input)overrides[id]=input.value});
-  if(action==='approve'&&!await confirmAction(`Approve and apply ${ids.length} selected proposal(s)? Review the evidence and physical changes first.`))return;
-  await mutate('/repairs/review',{ids,action,overrides});show(`Proposals ${action==='approve'?'approved and applied':'rejected'}.`)
-}
-async function loadGrid(){requireProject();const query=new URLSearchParams({page:gridPage,page_size:25,record_type:$('#gridType').value});if($('#layoutBranch').value!=='')query.set('layout_branch',$('#layoutBranch').value);grid=await request(api('/records?'+query));renderGrid()}
-function renderGrid(){
-  if(!grid)return;const filter=$('#columnSearch').value.toUpperCase();const columns=new Map();
-  grid.records.forEach(r=>r.fields.forEach(f=>{if(!filter||f.name.includes(filter))columns.set(`${f.branch}:${f.name}`,f)}));
-  const cols=[...columns.entries()];
-  $('#gridHead').innerHTML='<tr><th class="frozen">Select / #</th>'+cols.map(([key,f])=>`<th title="${esc(f.table)} · bytes ${f.start}–${f.end}">${esc(f.name)}<div class="field-rule">branch ${f.branch+1} · ${f.start}–${f.end}</div></th>`).join('')+'</tr>';
-  $('#gridBody').innerHTML=grid.records.map(r=>`<tr><td class="frozen"><input type="checkbox" data-row-select="${r.record}" ${selectedRows.has(r.record)?'checked':''} aria-label="Select record ${r.record}"><button class="secondary compact" data-editor-record="${r.record}">${r.record}</button></td>${cols.map(([key,f])=>{const value=r.fields.find(x=>`${x.branch}:${x.name}`===key);if(!value)return '<td class="readonly">—</td>';const suggested=value.pending_proposal||st.proposals.some(p=>p.record===r.record&&p.field===f.name&&['PROPOSED','PENDING_REVIEW'].includes(p.status));const invalid=r.findings.some(x=>x.field===f.name);return `<td class="${value.modified?'modified ':''}${suggested?'suggested ':''}${invalid?'invalid':''}">${value.readonly?esc(value.value):`<input aria-label="Record ${r.record} ${esc(f.name)} branch ${f.branch+1}" data-cell data-record="${r.record}" data-field="${esc(f.name)}" data-branch="${f.branch}" data-original="${esc(value.raw)}" value="${esc(value.raw)}" title="Source: ${esc(dot(value.original))} · ${f.width} bytes">`}</td>`}).join('')}</tr>`).join('');
-  $('#gridIndex').textContent=`Page ${gridPage} / ${Math.max(1,Math.ceil(grid.total/25))} · ${selectedRows.size} selected`;
-  $('#gridPrev').disabled=gridPage<=1;$('#gridNext').disabled=gridPage*25>=grid.total;
-  $('#editorValidation').innerHTML=($('#layoutBranch').value!==''?'<div class="issue">An assumed CTL layout is displayed. This does not change routing until you explicitly edit the record marker or condition fields.</div>':'')+grid.records.filter(r=>r.issues.length).map(r=>`<div class="small"><strong>Record ${r.record}:</strong> ${esc(r.issues.join('; '))}</div>`).join('')||'All displayed records pass supported structural checks.';
-}
-async function saveCell(input){if(input.value===input.dataset.original)return;if(cellBusy)throw Error('Wait for the current edit to finish');cellBusy=true;try{await mutate('/records',{edits:[{record:Number(input.dataset.record),field:input.dataset.field,value:input.value,align:$('#editAlign').value,branch:Number(input.dataset.branch)}]},'PATCH');await loadGrid();show('Manual field edit saved; unrelated bytes preserved.')}finally{cellBusy=false}}
-function renderBytes(){
-  const r=st.record;if(!r)return;$('#byteRecord').value=current;
-  $('#byteMeta').innerHTML=`<p>Record ${current} · ${r.length} bytes · ${esc(r.line_ending)} · <code>${esc(r.checksum)}</code>${r.preview_truncated?' · preview limited to 16,384 bytes':''}</p>`;
-  const hex=$('#hexView').checked, raw=r.raw, original=r.original_raw;
-  function physical(value,other,highlight){
-    let out='';const stride=hex?16:64;
-    for(let i=0;i<value.length;i+=stride){let chars='';for(let j=i;j<Math.min(i+stride,value.length);j++){
-      const c=value[j], f=r.fields.find(f=>f.start&&j>=f.start-1&&j<f.end), changed=highlight&&(j>=other.length||other[j]!==c);
-      chars+=`<span class="byte-char ${changed?'changed':''}" ${f?`data-field="${esc(f.name)}"`:''} title="Byte ${j+1}${f?' · '+esc(f.name):' · unmapped'}">${hex?c.charCodeAt(0).toString(16).padStart(2,'0')+' ':esc(c===' '?'·':c==='\t'?'→':c)}</span>`;
-    }out+=`<div class="byte-row"><span>${String(i+1).padStart(6,'0')}</span><span>${chars}</span></div>`}return out||'<span>Empty record</span>';
+function renderReviewStatus() {
+  const spec = state.spec || {};
+  const approved = !!spec.approved && !specDirty;
+  $('#reviewEyebrow').textContent = stage === 'dat' ? 'DAT REVIEW' : 'SPECIFICATION REVIEW';
+  $('#reviewTitle').textContent = stage === 'dat' ? 'Review values against the approved spec' : 'Confirm the field specification';
+  $('#reviewDescription').textContent = stage === 'dat' ? 'Keep source values in view. Enter data only; the approved rules apply padding and formatting.' : 'Review every master-template attribute. Unknown mandatory rules remain visible coverage limits.';
+  $('#specStatus').className = `review-status${approved ? ' approved' : ''}`;
+  const issues = [...(spec.issues || []), ...(spec.ai_questions || [])];
+  const intro = specDirty ? 'You have unsaved specification changes. Saving changes invalidates the previous approval and prepared download.' : approved ? `Specification approved · version ${spec.version || 'saved'}. ${stage === 'dat' ? 'Changing the specification requires a new review and approval.' : 'You can continue to DAT review or edit the draft.'}` : spec.ai_complete ? 'AI interpretation is complete. Review every field and the rules behind it before approving.' : 'AI interpretation is required before approval. Start interpretation, then review the resulting fields and rules.';
+  const unknownCount = draftFields.filter(field => field.mandatory === 'UNKNOWN' && ['physical','filler'].includes(field.rules?.mapping_type)).length;
+  $('#specStatus').innerHTML = `<strong>${esc(intro)}</strong>${unknownCount ? `<p>${unknownCount} physical fields have Unknown mandatory status. ${draftOptions.acknowledge_unknown_mandatory ? 'Acknowledged coverage limitation; the DAT cannot be called fully validated until these rules are resolved.' : 'Acknowledge this limitation or set each status before approval.'}</p>` : ''}${spec.ai_summary ? `<p>${esc(spec.ai_summary)}</p>` : ''}${issues.length ? `<ul>${issues.slice(0,6).map(issue => `<li>${esc(issueText(issue))}</li>`).join('')}</ul>${issues.length > 6 ? `<p>${issues.length - 6} additional items are available in field details.</p>` : ''}` : ''}`;
+  if(stage === 'dat'){
+    const review=state.review?.record, recordIssues=review?.issues||[];
+    const uncertain=recordIssues.some(issue=>issue.code==='UNCERTAIN_BOUNDARIES');
+    const unknown=recordIssues.some(issue=>issue.code==='UNKNOWN_LAYOUT'||issue.code==='AMBIGUOUS_LAYOUT');
+    $('#specStatus').innerHTML+=`<p><strong>${state.ai_review?.complete ? 'DAT AI review complete.' : 'DAT AI analysis is required before download.'}</strong> ${esc(state.ai_review?.summary||'Select Analyze DAT to start the review.')}</p>${recordIssues.length?`<ul>${recordIssues.slice(0,5).map(issue=>`<li>${esc(issueText(issue))}</li>`).join('')}</ul>`:''}${uncertain?`<button class="row-action" data-confirm-boundary="${review.number}">Confirm reviewed source boundaries</button>`:''}${unknown&&review.status!=='preserved'?'<p>Unrecognized records are blocked. Review the routing rules below; explicitly preserving unknown records requires a revised specification and approval.</p>':''}`;
   }
-  // Use byte hex from the backend for cp1252 rather than Unicode code points.
-  if(hex){const toText=h=>Array.from(h.matchAll(/../g),m=>String.fromCharCode(parseInt(m[0],16))).join('');$('#byteCurrent').innerHTML=physical(toText(r.hex),toText(r.original_hex),true);$('#byteOriginal').innerHTML=physical(toText(r.original_hex),toText(r.hex),false)}
-  else{$('#byteCurrent').innerHTML=physical(raw,original,true);$('#byteOriginal').innerHTML=physical(original,raw,false)}
-  $('#byteFields').innerHTML='<p>'+r.fields.filter(f=>f.start).map(f=>`<span class="pill ${f.modified?'bad':'neutral'}">${esc(f.name)} ${f.start}–${f.end}</span>`).join(' ')+'</p>';
+  $('#recordTools').classList.toggle('hidden', stage !== 'dat');
+  $('#bulkSpecTools').classList.toggle('hidden', stage !== 'spec');
+  $('#ackUnknownMandatory').checked = draftOptions.acknowledge_unknown_mandatory === true;
+  $('#issueFilterLabel').classList.toggle('hidden', stage !== 'dat');
+  $('#datActions').classList.toggle('hidden', stage !== 'dat');
+  $('#recordNumber').value = state.review?.record?.number || 1;
+  $('#recordNumber').max = state.review?.record_count || 1;
+  $('#recordTotal').textContent = `of ${state.review?.record_count || 0}`;
+  $('#tableHint').textContent = stage === 'spec' ? 'Tab / Enter moves between cells. Save the draft before approval. Position changes never renumber other fields.' : 'Enter data without boundary padding. Tab / Enter moves between values. Original values remain read-only.';
+  $('#pendingEdits').textContent = specDirty ? 'Specification draft changed' : valueEdits.size ? `${valueEdits.size} value change(s) to save` : 'All changes saved';
 }
-function renderExport(){const d=st.diagnosis;$('#exportState').innerHTML=`<div class="alert ${['structurally_validated','validated_with_warnings'].includes(d.export_status)?'success':''}">${esc(d.export_status.replaceAll('_',' '))} · ${d.records_with_findings} record(s) with findings</div><p><strong>Current SHA-256:</strong> <code>${esc(d.sha256)}</code></p><p>${esc(d.validation_scope)}</p><p>${st.generated_checksum===d.sha256?'Current version has been generated and re-parsed.':'Generate the current version before downloading.'}</p>`;$('#downloadDat').disabled=st.generated_checksum!==d.sha256;$('#draftOption').classList.toggle('hidden',!draftAllowed);$('#history').innerHTML=st.history.slice().reverse().map(h=>`<div class="report-line small"><strong>${esc(h.action)}</strong> · ${esc(h.timestamp)}${h.record?' · record '+h.record:''}${h.records?' · records '+esc((Array.isArray(h.records)?h.records.join(', '):String(h.records))):''}${h.after_checksum?'<div class="mono">'+esc(h.after_checksum)+'</div>':''}</div>`).join('')||'<p>No changes applied.</p>'}
-async function loadAIStatus(){
-  const s=await request('/api/ai/status');aiStatus=s;renderAIStatus();return s;
+function renderSummary() {
+  $('#summaryCards').classList.toggle('hidden', stage !== 'dat');
+  if (stage !== 'dat') return;
+  const summary = state.review?.summary || {};
+  const cards = [
+    [state.review?.record_count || 0, 'Records in file', ''],
+    [summary.percentage === null || summary.percentage === undefined ? '—' : `${Math.round(summary.percentage)}%`, 'Evaluable spec checks passed', 'good'],
+    [summary.blocking_count ?? summary.pending_count ?? '—', 'Blocking / unresolved items', 'warning'],
+    [summary.changed_records ?? 0, 'Records with saved changes', '']
+  ];
+  $('#summaryCards').innerHTML = cards.map(([number,label,className]) => `<div class="summary-card ${className}"><strong>${esc(number)}</strong><small>${esc(label)}</small></div>`).join('');
 }
-function renderAIStatus(){
-  const s=aiStatus;if(!s)return;
-  const state=String(s.connection_status||'not_configured').replaceAll('_',' ');
-  const provider=s.provider==='AmazonBedrockProvider'?'Amazon Bedrock':s.provider||'AI';
-  $('#aiStatus').innerHTML=`<div class="alert ${s.connection_status==='connected'?'success':''}">${esc(state)} · AI ${s.ai_available?'available':'unavailable'}</div><div class="report-line">Provider: <strong>${esc(provider)}</strong></div><div class="report-line">Model: <strong>${esc(s.model_id||'Not configured')}</strong></div>${s.region?`<div class="report-line">AWS Region: ${esc(s.region)}</div>`:''}<div class="report-line">Model access: ${s.model_accessible===true?'Verified by a live test':s.model_accessible===false?'Test failed':'Not tested'}</div><div class="report-line">Last successful test: ${esc(s.last_successful_test||'None')}</div>${s.error?`<div class="issue">${esc(s.error)}</div>`:''}`;
-  $('#aiReviewStatus').textContent=`${provider} · ${s.model_id||'No model configured'} · ${state}. ${s.ai_available?'AI output is reviewed before any correction.':'Check AI connection settings; you can still inspect, edit and export supported files.'}`;
-  $('#runAI').disabled=!s.ai_available;
+function renderFileRules() {
+  const editable=stage==='spec', disabled=editable?'':' disabled';
+  const options=(choices,current)=>choices.map(([value,label])=>`<option value="${esc(value)}"${value===current?' selected':''}>${esc(label)}</option>`).join('');
+  $('#fileRulesContent').innerHTML=`<div class="rules-option-grid"><label>DAT encoding<select data-option="encoding"${disabled}>${options([['ascii','ASCII'],['latin1','ISO-8859-1'],['cp1252','Windows-1252'],['utf-8','UTF-8 · byte positions apply']],draftOptions.encoding||'ascii')}</select></label><label>Physical record format<select data-option="record_format"${disabled}>${options([['stream','Line-separated records'],['fixed','Fixed byte count, no separators']],draftOptions.record_format||'stream')}</select></label><label>Fixed record bytes, if applicable<input type="number" min="1" max="1000000" data-option="record_length" value="${esc(draftOptions.record_length??'')}"${disabled}></label><label>Unrecognized records<select data-option="unknown_records"${disabled}>${options([['block','Block download until resolved'],['preserve','Preserve original bytes · explicitly approved']],draftOptions.unknown_records||'block')}</select></label></div><p class="annotation">An empty routing condition matches every record. For mixed files, specify which byte values identify each layout. Preserved unrecognized records keep their original bytes and are excluded from field validation.</p><div class="layout-rules">${draftLayouts.map((layout,index)=>`<div class="layout-rule"><div class="layout-heading"><label>Layout name<input data-layout-index="${index}" data-layout-key="name" value="${esc(layout.name||layout.id)}"${disabled}></label><label>Record width in bytes<input type="number" min="1" max="1000000" data-layout-index="${index}" data-layout-key="record_length" value="${esc(layout.record_length||'')}"${disabled}></label><span class="annotation">${(layout.field_ids||[]).length} fields · ${esc(layout.id)}</span></div><div class="routing-conditions">${(layout.when||[]).map((condition,conditionIndex)=>`<div class="routing-condition"><span>When bytes</span><input type="number" min="1" data-layout-index="${index}" data-condition-index="${conditionIndex}" data-condition-key="start" value="${esc(condition.start??'')}" aria-label="Routing start byte for ${esc(layout.name||layout.id)}"${disabled}><span>through</span><input type="number" min="1" data-layout-index="${index}" data-condition-index="${conditionIndex}" data-condition-key="end" value="${esc(condition.end??'')}" aria-label="Routing end byte for ${esc(layout.name||layout.id)}"${disabled}><span>equal</span><input data-layout-index="${index}" data-condition-index="${conditionIndex}" data-condition-key="equals" value="${esc(condition.equals??'')}" aria-label="Routing value for ${esc(layout.name||layout.id)}"${disabled}>${editable?`<button class="text-button" data-remove-condition="${index}:${conditionIndex}" aria-label="Remove routing condition">Remove</button>`:''}</div>`).join('')||'<p class="annotation">No condition · this layout matches all records.</p>'}${editable?`<button class="secondary compact" data-add-condition="${index}">Add routing condition</button>`:''}</div><details><summary>Fields in this layout</summary><p class="annotation">${(layout.field_ids||[]).map(id=>esc(draftFields.find(field=>field.id===id)?.field_name||id)).join(' · ')}</p></details></div>`).join('')}</div><p class="annotation">Change a field’s layout in Rules & source. Save the specification draft to validate these rules before approval.</p>`;
 }
-function selectedSample(){return samples.find(s=>s.id===$('#sampleSelect').value)}
-function sampleVariant(sample){return sample?.variants.find(v=>v.id===$('#sampleVariant').value)}
-function expectedLabel(sample,variant){return !sample.supported?'Compatibility example · validated export blocked':variant.expected_valid?'Expected: no findings':`Expected: ${variant.expected_records_with_findings??'one or more'} record(s) with findings`}
-async function loadSamples(){
-  const manifest=await request('/api/samples');samples=manifest.samples||[];
-  $('#sampleCount').textContent=`${samples.length} layouts · up to 4,800 bytes`;
-  $('#sampleSelect').innerHTML=[true,false].map(supported=>`<optgroup label="${supported?'Supported practice layouts':'Unsupported declarations · inspect limitations'}">${samples.filter(s=>s.supported===supported).map(s=>`<option value="${esc(s.id)}">${esc(s.title)}</option>`).join('')}</optgroup>`).join('');
-  if(samples.some(s=>s.id==='receipt_4800'))$('#sampleSelect').value='receipt_4800';
-  $('#sampleSelect').disabled=!samples.length;$('#loadSample').disabled=!samples.length;$('#downloadSample').disabled=!samples.length;
-  updateSampleVariants();renderExercise();
+function renderTable() {
+  const datMode = stage === 'dat';
+  $('#reviewTable').classList.toggle('dat-mode', datMode);
+  $('#reviewHead').innerHTML = `<tr>${columns.map(column => `<th scope="col" class="${column.className}"${['raw_sample','cleansed_output'].includes(column.key) ? ' title="Specification example only; this is not a replacement for actual DAT values"' : ''}>${esc(column.label)}</th>`).join('')}${datMode ? '<th class="value-col" scope="col">Original DAT value</th><th class="value-col" scope="col">Value to use</th><th class="match-col" scope="col">Spec match</th><th class="action-col" scope="col">Issue / action</th>' : ''}</tr>`;
+  const search = $('#fieldSearch').value.toLowerCase();
+  const wrap=$('.review-table-wrap'), scrollLeft=wrap.scrollLeft, scrollTop=wrap.scrollTop;
+  const focused=document.activeElement;
+  const focus=focused?.matches('[data-value-field],[data-spec-field]')?{field:focused.dataset.valueField||focused.dataset.specField,column:focused.dataset.column,start:focused.selectionStart,end:focused.selectionEnd}:null;
+  const fields = draftFields.filter(field => {
+    if (search && !`${field.field_name} ${field.category_functional_group}`.toLowerCase().includes(search)) return false;
+    if (datMode && $('#issuesOnly').checked) {
+      const result = reviewField(field.id);
+      if (result && ['passed','valid','matched'].includes(result.status) && !result.issues?.length) return false;
+    }
+    return true;
+  });
+  $('#fieldCount').textContent = `${fields.length} of ${draftFields.length} fields`;
+  $('#tableEmpty').classList.toggle('hidden', !!fields.length);
+  $('#reviewBody').innerHTML = fields.map(field => {
+    const result = datMode ? reviewField(field.id) : null;
+    const issues = datMode ? result?.issues || [] : fieldIssues(field);
+    return `<tr data-field-row="${esc(field.id)}" class="${issues.length ? 'issue-row' : ''}">${columns.map(column => {
+      const text = field[column.key] ?? '';
+      const content = datMode || column.key === 'id' ? `<span class="${column.key === 'field_name' ? 'field-name-read' : ''}">${esc(text)}</span>` : column.key === 'mandatory' ? `<select class="spec-input" data-spec-field="${esc(field.id)}" data-column="mandatory" aria-label="Mandatory for ${esc(field.field_name)}"><option value="UNKNOWN"${text==='UNKNOWN'?' selected':''}>Unknown</option><option value="YES"${text==='YES'?' selected':''}>Yes</option><option value="NO"${text==='NO'?' selected':''}>No</option></select>` : `<textarea class="spec-input${column.key === 'field_name' ? ' field-name' : ''}${issues.length ? ' invalid' : ''}" data-spec-field="${esc(field.id)}" data-column="${column.key}" aria-label="${esc(column.label)} for ${esc(field.field_name)}" rows="2" spellcheck="false"${activeJobs().some(job=>job.kind==='spec')?' disabled':''}>${esc(text)}</textarea>`;
+      return `<td class="${column.className}">${content}${column.key === 'field_name' ? `<button class="field-detail-button" data-details="${esc(field.id)}">Rules & source ↗</button>` : ''}</td>`;
+    }).join('')}${datMode ? renderDatCells(field,result) : ''}</tr>`;
+  }).join('');
+  wrap.scrollLeft=scrollLeft;wrap.scrollTop=scrollTop;
+  if(focus){const input=$$('[data-value-field],[data-spec-field]').find(item=>(item.dataset.valueField||item.dataset.specField)===focus.field&&item.dataset.column===focus.column);if(input){input.focus({preventScroll:true});if(input.setSelectionRange)input.setSelectionRange(focus.start,focus.end);}}
+  if (pendingFocus) { const target = $$('[data-value-field]').find(input => input.dataset.valueField === pendingFocus); target?.focus(); pendingFocus = null; }
 }
-function updateSampleVariants(){
-  const s=selectedSample();$('#sampleVariant').innerHTML=(s?.variants||[]).map(v=>`<option value="${esc(v.id)}">${esc(v.label)}</option>`).join('');
-  if(s?.variants.some(v=>v.id==='missing_spaces'))$('#sampleVariant').value='missing_spaces';
-  $('#sampleVariant').disabled=!s;renderSampleDescription();
+function renderDatCells(field, result) {
+  if (!result) return '<td class="value-col"><span class="value-label">Not applicable to this layout</span></td><td class="value-col">—</td><td class="match-col"><span class="pill neutral">Not applicable</span></td><td class="action-col"><span class="value-label">No source field in this record.</span></td>';
+  const physical = !['system','constant','filler'].includes(field.rules?.mapping_type);
+  const edited = valueEdits.has(`${state.review.record.number}:${field.id}`);
+  const known = result.percentage !== null && result.percentage !== undefined;
+  const pass = known && result.percentage === 100 && !result.issues?.length;
+  const matchLabel=result.status==='not_applicable'?'Not applicable':known?`${Math.round(result.percentage)}%`:result.status==='needs_review'?'Needs review':'Not verified';
+  const issues = result.issues || [];
+  const ambiguous = result.status === 'ambiguous' || result.boundaries_uncertain || (state.review?.record?.issues||[]).some(issue=>issue.code==='UNCERTAIN_BOUNDARIES');
+  const value = currentValue(result);
+  return `<td class="value-col"><div class="original-value">${result.original_value === null || result.original_value === undefined ? 'No source reading' : result.original_value === '' ? '(blank)' : esc(result.original_value)}</div>${ambiguous ? '<span class="pill warn">Boundary needs review</span>' : '<span class="value-label">Original source · read-only</span>'}</td><td class="value-col">${physical ? `<input class="value-input${edited ? ' changed' : ''}" data-value-field="${esc(field.id)}" aria-label="Value to use for ${esc(field.field_name)} in record ${state.review.record.number}" value="${esc(value)}" spellcheck="false" autocomplete="off"><span class="value-label">${value === '' ? field.rules?.required ? 'Required value is blank' : 'Blank value' : edited ? 'Unsaved change' : result.value !== result.original_value ? 'Saved working value' : 'Data only · padding applied by spec'}</span>` : `<span class="value-label">${field.rules?.mapping_type === 'filler' ? 'Reserved bytes · system managed' : 'Generated from the approved specification'}</span>`}</td><td class="match-col"><span class="pill ${pass ? 'good' : known ? 'warn' : 'neutral'}">${esc(matchLabel)}</span><span class="check-count">${result.passed ?? 0} / ${result.total ?? 0} applicable checks</span><button class="check-button" data-details="${esc(field.id)}">View checks</button>${edited ? '<span class="value-label">Rechecked after save</span>' : ''}</td><td class="action-col">${issues.length ? issues.map(issue => `<p class="issue-text">${esc(issueText(issue))}</p>`).join('') : `<p class="issue-text resolved">${pass ? 'Matches the supported spec checks.' : 'Review analysis coverage and rules.'}</p>`}${ambiguous ? `<button class="row-action" data-confirm-boundary="${state.review.record.number}">Confirm source reading</button>` : ''}${physical && issues.length ? `<button class="row-action" data-focus-value="${esc(field.id)}">Edit value</button>` : ''}</td>`;
 }
-function renderSampleDescription(){
-  const s=selectedSample(),v=sampleVariant(s);if(!s||!v)return;
-  $('#sampleDescription').innerHTML=`<div class="flex"><span class="pill ${s.supported?'good':'bad'}">${s.supported?'Supported in Studio':'Oracle syntax outside Studio support'}</span><span class="small">${s.record_count} records · ${s.record_length.toLocaleString()} bytes per correct record · ${esc(s.record_format)} · ${esc(s.line_ending)}</span></div><p>${esc(s.description)}</p><div class="notice"><strong>${esc(expectedLabel(s,v))}</strong><p>${esc(v.exercise)}</p>${s.keys.length?`<span>Reconciliation key: <code>${esc(s.keys.join(' + '))}</code></span>`:''}</div>`;
+function renderFieldContext() {
+  const panel = $('#fieldContext');
+  if (stage === 'upload') return;
+  const field = draftFields.find(item => item.id === selectedFieldId) || draftFields[0];
+  if (!field) { panel.textContent = 'Select a field to inspect its source and validation evidence.'; return; }
+  const result = reviewField(field.id);
+  const alignment = state.review?.record?.alignment;
+  const initial = alignment?.initial?.find(item => item.field_id === field.id);
+  const mappings = (alignment?.candidates || []).flatMap(candidate => (candidate.fields || []).filter(item => item.id === field.id).map(item => ({...item,candidate_id:candidate.id,certified:candidate.certified})));
+  panel.innerHTML = `<h3>${esc(field.field_name || field.id)}</h3><div class="annotation">Field ID ${esc(field.id)} · expected bytes ${esc(field.start_pos || '—')}–${esc(field.end_pos || '—')}</div><div class="evidence-row"><strong>Source reference</strong><div>${esc(field.source_reference || `${field.source?.sheet || ''}!${field.source?.row || ''}`)}</div><strong>Mandatory</strong><div>${esc(field.mandatory || 'UNKNOWN')}</div></div>${stage === 'dat' ? `<div class="evidence-row"><strong>Original bytes</strong><code>${esc(result?.original_bytes_hex || 'No source slice')}</code><strong>Original value</strong><code>${esc(result?.original_value ?? '(none)')}</code></div><div class="evidence-row"><strong>Alignment</strong><div class="pill ${alignment?.status === 'already_valid' ? 'good' : 'warn'}">${esc(alignment?.status || 'Not analyzed')}</div><p>${esc(alignment?.reason || 'Select an applicable physical record.')}</p>${initial ? `<div>Initial source offsets ${esc(initial.start)}–${esc(initial.end)} · ${initial.valid ? 'checks passed' : 'checks need review'}</div>` : ''}${mappings.map(item => `<div>${esc(item.candidate_id)}: source offsets ${esc(item.source_start ?? '—')}–${esc(item.source_end ?? '—')}${item.certified ? ' · structurally certified' : ''}</div>`).join('')}</div><div class="evidence-row"><strong>Validation findings</strong>${(result?.issues || []).map(item => `<p class="issue-text">${esc(issueText(item))}</p>`).join('') || '<p>No field finding in this record.</p>'}</div>` : `<div class="evidence-row"><strong>Source metadata</strong><code>${esc(JSON.stringify(field.source?.extra_columns || {}))}</code></div>`}`;
+  if (stage === 'dat' && alignment) {
+    const findings = (alignment.field_findings || []).filter(item => item.field_id === field.id);
+    const anchors = (alignment.anchor_evidence || []).filter(item => item.fieldId === field.id);
+    const score = (alignment.score_breakdown || []).find(item => item.field_id === field.id);
+    panel.innerHTML += `<div class="evidence-row"><strong>Structural assessment</strong><div>${esc(alignment.structural_status || 'Review required')} · ${esc(alignment.validation_status || 'Incomplete')}</div><strong>Certification</strong><div>${esc(alignment.certification?.level || 'Human review required')}${alignment.resource_limit_reached ? ' · search limit reached' : ''}</div>${anchors.map(item => `<p>Anchor ${esc(item.anchorType)} at bytes ${esc(item.sourceStart)}–${esc(item.sourceEnd)}</p>`).join('')}${findings.map(item => `<p class="issue-text">${esc(item.code)}: ${esc(item.message)}</p>`).join('')}${score ? `<p>Ranking factors: ${esc(JSON.stringify(score))}</p>` : ''}</div>`;
+  }
+  if (stage === 'dat') {
+    const record = state.review?.record?.number;
+    const audit = (state.ai_review?.alignment_reviews || []).find(item => item.record === record);
+    if (audit) {
+      const finding = audit.reconciliation;
+      const decided = (state.ai_decisions || []).some(item => item.evidence_id === audit.evidence_id && item.record === record && item.input_fingerprint === state.ai_review?.input_fingerprint);
+      panel.innerHTML += `<div class="evidence-row"><h3>Bedrock audit</h3><p>${esc(finding.summary)}</p><p>Status: ${esc(finding.ai_status)} · ${finding.human_review_required ? 'Human review required' : 'No disagreement recorded'}</p>${finding.findings.map(item => `<p class="issue-text">${esc(item.field_id)}: ${esc(item.concern)}</p>`).join('')}${finding.spec_changes_for_review.map(item => `<p class="issue-text">Proposed spec change · ${esc(item.field_id)}: ${esc(item.attribute)} → ${esc(item.proposed_value)}. ${esc(item.reason)}</p>`).join('')}${finding.rule_proposals_for_review.map(item => `<p class="issue-text">Proposed rule · ${esc(item.field_id)}: ${esc(item.kind)} → ${esc(item.value)}. ${esc(item.reason)}</p>`).join('')}${finding.human_review_required && !decided ? `<button class="secondary compact" data-reject-ai="${esc(audit.evidence_id)}" data-ai-record="${record}">Reject AI advice with reason</button><p class="annotation">To accept a proposed specification change, edit and reapprove the specification.</p>` : decided ? '<span class="pill good">Reviewed and rejected</span>' : ''}</div>`;
+    }
+  }
 }
-function renderExercise(){
-  const e=$('#activeExercise'),loaded=st?.sample;e.classList.toggle('hidden',!loaded);if(!loaded){e.replaceChildren();return}
-  const sample=samples.find(s=>s.id===loaded.id)||loaded;
-  const variant=sample.variants?.find(v=>v.id===loaded.variant);
-  e.innerHTML=`<div class="flex"><div><div class="eyebrow">Loaded practice case</div><h2>${esc(loaded.title||sample.title)}</h2></div><span class="pill ${loaded.supported?'good':'bad'}">${loaded.supported?'Supported layout':'Compatibility limit'}</span></div><p><strong>${esc(variant?.label||String(loaded.variant||''))}</strong> · ${esc(loaded.exercise||variant?.exercise||loaded.description||'')}</p>${loaded.keys?.length?`<p>For reference evidence, use <code>${esc(loaded.keys.join(' + '))}</code> as the reconciliation key. Review proposed values before approval.</p>`:''}<div class="btnrow"><button class="secondary compact" data-page-link="diagnostics">Inspect findings</button><button class="secondary compact" data-page-link="repairs">Review corrections</button><button class="secondary compact" data-page-link="export">Generate output</button></div>`;
+function renderGeneration() {
+  if (stage !== 'dat') return;
+  const generation = state.generation || state.export || {};
+  const available = !!state.generated?.checksum && !valueEdits.size && !specDirty;
+  $('#downloadDat').classList.toggle('hidden', !available || !!valueEdits.size || specDirty);
+  $('#generateButton').classList.toggle('hidden', available && !valueEdits.size && !specDirty);
+  const blockers = generation.blockers || state.review?.blockers || [];
+  const message = available ? 'The current DAT bytes passed the required checks. Download is ready.' : blockers.length ? blockers.map(issueText).join(' ') : state.spec?.approved ? 'Save changes, complete DAT analysis and validate the exact output before download.' : 'Approve the specification to continue.';
+  $('#generationStatus').className = available ? 'generation-success' : 'generation-blocked';
+  $('#generationStatus').textContent = message;
 }
-function resetProjectView(){
-  current=1;pageNumber=1;gridPage=1;grid=null;repairOffset=0;repairTotal=0;selectedRows.clear();
-  for(const id of ['weights','gridHead','gridBody'])$('#'+id).replaceChildren();
-  for(const id of ['recordSearch','typeFilter','statusFilter','gridType','columnSearch','layoutBranch'])$('#'+id).value='';
-  $('#sortFilter').value='record';$('#draftExport').checked=false;$('#shareValues').checked=false;
+function semanticSpecChanges(){
+  const saved=new Map((state?.spec?.fields||[]).map(field=>[field.id,field]));
+  return specDirty&&draftFields.some(field=>['datatype_conversion','padding_alignment','mapping_type'].some(key=>field[key]!==saved.get(field.id)?.[key]));
 }
-async function loadSample(){
-  const sample=selectedSample(),variant=sampleVariant(sample);if(!sample||!variant)throw Error('Choose a practice case first');
-  const button=$('#loadSample');button.disabled=true;button.textContent='Creating practice project…';$('#sampleSelect').disabled=true;$('#sampleVariant').disabled=true;
-  try{
-    const created=await request('/api/projects',{method:'POST',body:JSON.stringify({name:`${sample.title} · ${variant.label}`.slice(0,120)})});
-    pid=created.project.id;st=created;resetProjectView();render();
-    st=await request(api('/sample'),{method:'POST',body:JSON.stringify({version:st.project.version,sample_id:sample.id,variant:variant.id})});
-    render();await listProjects();switchPage('diagnostics');show(`Practice case loaded. ${expectedLabel(sample,variant)}. Follow the exercise above.`);
-  }finally{button.disabled=false;button.textContent='Load practice case →';$('#sampleSelect').disabled=false;$('#sampleVariant').disabled=false;await listProjects().catch(()=>{})}
+function renderButtons() {
+  const exists = !!state?.document;
+  const pending = activeJobs();
+  const specRunning = pending.some(job => job.kind === 'spec');
+  const datRunning = pending.some(job => job.kind === 'dat');
+  const showSpec = stage === 'spec';
+  for (const id of ['saveSpecButton','analyzeSpecButton','approveSpecButton']) $('#'+id).classList.toggle('hidden', !showSpec);
+  $('#editSpecButton').classList.toggle('hidden', stage !== 'dat');
+  $('#analyzeDatButton').classList.toggle('hidden', stage !== 'dat');
+  $('#saveSpecButton').disabled = busy || !exists || !specDirty;
+  $('#analyzeSpecButton').disabled = busy || !exists || specRunning || !!state?.spec?.approved&&!specDirty;
+  $('#approveSpecButton').disabled = busy || !draftFields.length || specRunning || !state?.spec?.ai_complete || semanticSpecChanges();
+  $('#approveSpecButton').textContent = state?.spec?.approved && !specDirty ? 'Continue to DAT review →' : 'Approve specification →';
+  $('#analyzeDatButton').disabled = busy || !state?.spec?.approved || datRunning;
+  $('#analyzeDatButton').textContent = datRunning ? 'Analysis in progress…' : 'Analyze DAT';
+  $('#undoButton').disabled = busy || !(state?.undo_count || state?.history?.can_undo);
+  $('#redoButton').disabled = busy || !(state?.redo_count || state?.history?.can_redo);
+  $('#saveValuesButton').disabled = busy || !valueEdits.size;
+  $('#generateButton').disabled = busy || !state?.spec?.approved || datRunning;
+  $('#previousRecord').disabled = busy || (state?.review?.record?.number || 1) <= 1;
+  $('#nextRecord').disabled = busy || (state?.review?.record?.number || 1) >= (state?.review?.record_count || 0);
+  $('#nextIssue').disabled = busy || !(state?.review?.record_count);
+  $('#refreshProject').disabled = busy || !projectId;
+  $('#newProjectButton').disabled = busy;
+  $('#uploadButton').disabled = busy || !!state?.document || state?.stage==='legacy' || !!(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length);
 }
-async function listProjects(){const projects=await request('/api/projects');$('#projectList').innerHTML=projects.length?projects.map(p=>`<div class="project-item"><button class="secondary" data-open-project="${esc(p.id)}">${esc(p.name)}<div class="small">Version ${p.version}</div></button><button class="danger compact" data-delete-project="${esc(p.id)}" aria-label="Delete ${esc(p.name)}">Delete</button></div>`).join(''):'<p>Create your first project to begin.</p>'}
-async function openProject(id){pid=id;resetProjectView();await refresh();await listProjects();if(!st.loaded)show('Project created. Import its CTL and DAT files or choose a practice case.');if(active==='editor'&&st.loaded)await loadGrid();if(active==='repairs'&&st.loaded)await loadProposals()}
-function download(path){requireProject();window.location.assign(api(path))}
-async function initialize(){const s=await request('/api/session');draftAllowed=s.draft_export_enabled;if(!s.authenticated){if(s.login_required){$('#login').classList.remove('hidden');$('#application').classList.add('hidden');return}await request('/api/session',{method:'POST',body:'{}'})}$('#login').classList.add('hidden');$('#application').classList.remove('hidden');render();const results=await Promise.allSettled([listProjects(),loadSamples(),loadAIStatus()]);results.filter(r=>r.status==='rejected').forEach(r=>fail(r.reason))}
+async function saveSpec() {
+  if (!specDirty) return;
+  const fields = clone(draftFields), options = clone(draftOptions);
+  const next = await request(projectPath('/spec'), {method:'PUT',body:JSON.stringify({version:state.project.version,fields,options,layouts:clone(draftLayouts)})});
+  specDirty = false;
+  applyState(next);
+  notify('Specification draft saved. Review any unresolved rules before approval.');
+}
+async function saveValues() {
+  if (!valueEdits.size) return;
+  const edits = Array.from(valueEdits.values());
+  const next = await request(projectPath('/values'), {method:'PATCH',body:JSON.stringify({version:state.project.version,edits})});
+  valueEdits.clear(); applyState(next);
+  notify('Value changes saved. Formatting and checks have been recalculated.');
+}
+async function changeRecord(number) {
+  if (!Number.isInteger(number) || number < 1 || number > (state.review?.record_count || 0)) throw Error('Enter a record number within this file.');
+  await saveValues();
+  await refreshProject(number);
+}
+async function nextIssue() {
+  const current = state.review?.record?.number || 1;
+  const summaries = state.review?.record_summaries || [];
+  const unresolved = summaries.filter(record => !['valid','passed','matched'].includes(record.status) || record.issues?.length);
+  const next = unresolved.find(record => record.number > current) || unresolved[0];
+  if (next) await changeRecord(next.number);
+  else notify('No remaining record issues were found in the current review.');
+  const first = $$('[data-value-field]').find(input => input.closest('tr').classList.contains('issue-row'));
+  first?.focus();
+}
+function openDetails(id) {
+  const field = draftFields.find(item => item.id === id); if (!field) return;
+  selectedFieldId = id;
+  const rules = field.rules || {}, result = reviewField(id), editable = stage === 'spec';
+  $('#detailTitle').textContent = field.field_name || 'Unnamed field';
+  const source = field.source || {};
+  const sources = Array.isArray(source) ? source : [source];
+  const ruleOptions = (values, selected) => values.map(([value,label]) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`).join('');
+  $('#detailContent').innerHTML = `<div class="detail-section"><h3>Reviewed formatting & validation rules</h3><p>${editable ? 'These controls describe how the field is read and written. Rule changes are saved with the specification draft.' : 'These rules come from the approved specification. Edit the specification to change them.'}</p><div class="rule-grid"><label>Record layout<input id="ruleLayout" list="layoutChoices" value="${esc(rules.layout_id||draftLayouts.find(layout=>(layout.field_ids||[]).includes(field.id))?.id||'primary')}"${editable?'':' disabled'}><datalist id="layoutChoices">${draftLayouts.map(layout=>`<option value="${esc(layout.id)}">${esc(layout.name||layout.id)}</option>`).join('')}</datalist><span class="annotation">Choose a layout or enter a new layout name.</span></label><label>Field mapping<select id="ruleMapping"${editable ? '' : ' disabled'}>${ruleOptions([['physical','Value from DAT'],['filler','Reserved / filler'],['constant','Constant from spec'],['system','System generated']],rules.mapping_type || 'physical')}</select></label><label>Value type<select id="ruleDatatype"${editable ? '' : ' disabled'}>${ruleOptions([['char','Text'],['integer','Whole number'],['decimal','Decimal number'],['float','Scientific / decimal number'],['date','Date'],['unknown','Unresolved type']],rules.datatype || 'char')}</select></label><label>Padding from specification<select id="rulePadding"${editable ? '' : ' disabled'}>${ruleOptions([['right','Right padding · left aligned'],['left','Left padding · right aligned'],['none','No padding'],['unknown','Unresolved padding']],rules.padding?.side || 'right')}</select></label><label>Padding character<input id="rulePadChar" maxlength="1" value="${esc(rules.padding?.char ?? ' ')}"${editable ? '' : ' disabled'}><span class="annotation">A space appears as an empty character.</span></label><label>Supported conversion<select id="ruleConversion"${editable ? '' : ' disabled'}>${ruleOptions([['identity','Keep value'],['trim','Trim boundary padding'],['rtrim','Trim right padding'],['ltrim','Trim left padding'],['unsupported','Unsupported conversion'],['database','Database-only expression'],['to_number','Number preview'],['to_date','Date preview']],rules.conversion || 'identity')}</select></label><label>Date format<input id="ruleDateFormat" value="${esc(rules.date_format || '')}" placeholder="YYYYMMDD"${editable ? '' : ' disabled'}></label><label>Allowed values, one per line<textarea id="ruleAllowed" rows="3"${editable ? '' : ' disabled'}>${esc((rules.allowed_values || []).join('\n'))}</textarea></label><label>Explicit constant<input id="ruleConstant" value="${esc(rules.constant ?? '')}"${editable ? '' : ' disabled'}></label><label class="checkbox-label"><input type="checkbox" id="ruleInternalSpaces"${rules.allow_internal_whitespace!==false?' checked':''}${editable?'':' disabled'}> Allow internal spaces</label><label>Mandatory status<select id="ruleRequired"${editable ? '' : ' disabled'}>${ruleOptions([['UNKNOWN','Unknown'],['YES','Yes'],['NO','No']],field.mandatory||'UNKNOWN')}</select></label></div><p class="annotation">Raw and cleansed samples illustrate formatting. They authorize a constant only when the approved rule explicitly says so. Staging values are local previews, not database results.</p></div>${result ? `<div class="detail-section"><h3>Current record checks</h3>${result.staging_preview!==undefined?`<p><strong>Local staging preview:</strong> ${esc(result.staging_preview??'(blank)')}<br><span class="annotation">${esc(result.preview_label||'Local preview only; not an Oracle database result.')}</span></p>`:''}<ul class="check-list">${(result.checks || []).map(check => `<li><span>${esc(check.label || check.name || check.kind || check.code || 'Spec check')}<small>${esc(check.message || check.reason || '')}</small></span><span class="pill ${check.passed === true || check.status === 'passed' ? 'good' : check.passed === false || check.status === 'failed' ? 'warn' : 'neutral'}">${check.passed === true || check.status === 'passed' ? 'Passed' : check.passed === false || check.status === 'failed' ? 'Needs correction' : 'Not verified'}</span></li>`).join('') || '<li>No evaluable checks are available for this field.</li>'}</ul>${result.original_percentage !== undefined ? `<p>Original source match: ${result.original_percentage === null ? 'Not fully verified' : `${result.original_percentage}%`}. Current checks reflect saved edits and formatting.</p>` : ''}</div>` : ''}<div class="detail-section"><h3>Source provenance</h3><a href="${esc(projectPath('/download?spec_source=true'))}" class="source-download">Download original specification ↗</a>${sources.map(item => `<div class="source-item">${esc(item.section || item.sheet || state.document?.name || 'Uploaded specification')}${item.row ? ` · row ${esc(item.row)}` : ''}${item.line ? ` · line ${esc(item.line)}` : ''}${item.cells ? `<br>${Object.entries(item.cells).map(([key,value]) => `${esc(key)}: ${esc(value)}`).join('<br>')}` : ''}</div>`).join('')}<p class="annotation">The original uploaded document is preserved. Your interpreted specification is stored separately.</p></div>`;
+  $('#saveRulesButton').classList.toggle('hidden', !editable);
+  $('#detailDialog').showModal();
+}
+function applyRuleEdits() {
+  const field = draftFields.find(item => item.id === selectedFieldId); if (!field) return;
+  const rules = clone(field.rules || {});
+  rules.mapping_type = $('#ruleMapping').value; rules.datatype = $('#ruleDatatype').value;
+  rules.layout_id=$('#ruleLayout').value.trim()||'primary';
+  rules.allow_internal_whitespace=$('#ruleInternalSpaces').checked;
+  rules.padding = {side:$('#rulePadding').value,char:$('#rulePadChar').value || ' '};
+  rules.conversion = $('#ruleConversion').value; rules.date_format = $('#ruleDateFormat').value;
+  field.mandatory = $('#ruleRequired').value;
+  rules.required = field.mandatory === 'YES' ? true : field.mandatory === 'NO' ? false : null;
+  const allowed=$('#ruleAllowed').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(allowed.length)rules.allowed_values=allowed;else delete rules.allowed_values;
+  if (rules.mapping_type === 'constant') rules.constant = $('#ruleConstant').value;
+  else delete rules.constant;
+  field.rules = rules;
+  for(const layout of draftLayouts)layout.field_ids=(layout.field_ids||[]).filter(id=>id!==field.id);
+  let layout=draftLayouts.find(item=>item.id===rules.layout_id);
+  if(!layout){layout={id:rules.layout_id,name:rules.layout_id,field_ids:[],record_length:rules.end||Number(field.end_pos)||1,when:[]};draftLayouts.push(layout);}
+  layout.field_ids.push(field.id);draftLayouts=draftLayouts.filter(item=>item.field_ids.length);
+  field.mapping_type = rules.mapping_type;
+  const types={char:'CHAR',integer:'INTEGER EXTERNAL',decimal:'DECIMAL EXTERNAL',float:'FLOAT EXTERNAL',date:`DATE \"${rules.date_format||'YYYYMMDD'}\"`,unknown:'Unresolved'};
+  field.datatype_conversion=rules.conversion==='to_number'?'TO_NUMBER':rules.conversion==='to_date'?`TO_DATE(value, '${rules.date_format||'YYYYMMDD'}')`:rules.conversion==='trim'?'TRIM':types[rules.datatype]||field.datatype_conversion;
+  field.padding_alignment = rules.padding.side === 'none' ? 'No padding' : `${rules.padding.side === 'right' ? 'Left aligned, right' : 'Right aligned, left'} ${rules.padding.char === ' ' ? 'space' : `“${rules.padding.char}”`} padding`;
+  specDirty = true; $('#detailDialog').close(); render();
+}
 
-$$('.nav').forEach(e=>e.onclick=()=>switchPage(e.dataset.page));
-$('#sampleSelect').onchange=updateSampleVariants;$('#sampleVariant').onchange=renderSampleDescription;
-$('#sampleForm').onsubmit=e=>{e.preventDefault();loadSample().catch(fail)};
-$('#downloadSample').onclick=()=>{const s=selectedSample();if(s)window.location.assign(`/api/samples/${encodeURIComponent(s.id)}/download`)};
-$('#loginForm').onsubmit=async e=>{e.preventDefault();try{await request('/api/session',{method:'POST',body:JSON.stringify({access_token:$('#accessToken').value})});$('#accessToken').value='';await initialize()}catch(e){fail(e)}};
-$('#createForm').onsubmit=async e=>{e.preventDefault();try{const p=await request('/api/projects',{method:'POST',body:JSON.stringify({name:$('#newProject').value})});await openProject(p.project.id)}catch(e){fail(e)}};
-$('#recordFormat').onchange=()=>{$('#recordLength').disabled=$('#recordFormat').value!=='fixed';$('#recordLength').required=!$('#recordLength').disabled};
-$('#uploadForm').onsubmit=async e=>{e.preventDefault();try{
-  if(!pid){const p=await request('/api/projects',{method:'POST',body:JSON.stringify({name:$('#newProject').value||'DAT review'})});pid=p.project.id;st=p}
-  if(st.loaded)throw Error('Create a new project to import a different source set');
-  const fd=new FormData(e.target);fd.set('version',st.project.version);if(!fd.get('record_length'))fd.delete('record_length');
-  const progress=$('#uploadProgress');progress.classList.remove('hidden');$('#uploadButton').disabled=true;
-  st=await new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST',api('/files'));xhr.setRequestHeader('X-Studio-Request','1');xhr.upload.onprogress=e=>{if(e.lengthComputable)progress.value=e.loaded/e.total*100};xhr.onload=()=>{try{const r=JSON.parse(xhr.responseText);xhr.status<300?resolve(r):reject(Error(typeof r.detail==='string'?r.detail:JSON.stringify(r.detail)))}catch(e){reject(e)}};xhr.onerror=()=>reject(Error('Upload connection failed'));xhr.send(fd)});
-  current=1;pageNumber=1;render();await listProjects();switchPage('diagnostics');show('Files imported. Diagnostics and repair hypotheses are ready for review.');
-}catch(e){fail(e)}finally{$('#uploadProgress').classList.add('hidden');$('#uploadButton').disabled=!!st?.loaded}};
-$('#applyFilters').onclick=()=>{pageNumber=1;refresh().catch(fail)};$('#recordSearch').onkeydown=e=>{if(e.key==='Enter')$('#applyFilters').click()};
-$('#prevPage').onclick=()=>{pageNumber--;refresh().catch(fail)};$('#nextPage').onclick=()=>{pageNumber++;refresh().catch(fail)};
-$('#openEditor').onclick=()=>switchPage('editor');
-$('#analyze').onclick=async()=>{try{const weights={};$$('[data-weight]').forEach(e=>weights[e.dataset.weight]=Number(e.value));await mutate('/analyze',{weights});show('Bounded reconstruction finished. Review candidates and their score separation.')}catch(e){fail(e)}};
-$('#pendingOnly').onchange=()=>{repairOffset=0;loadProposals().catch(fail)};$('#repairPrev').onclick=()=>{repairOffset-=50;loadProposals().catch(fail)};$('#repairNext').onclick=()=>{repairOffset+=50;loadProposals().catch(fail)};$('#approveSelected').onclick=()=>review($$('[data-proposal]:checked').map(e=>e.dataset.proposal),'approve').catch(fail);$('#rejectSelected').onclick=()=>review($$('[data-proposal]:checked').map(e=>e.dataset.proposal),'reject').catch(fail);
-$('#runAI').onclick=()=>runAI().catch(fail);
-$('#columnSearch').oninput=renderGrid;$('#loadGrid').onclick=()=>{gridPage=1;loadGrid().catch(fail)};$('#gridPrev').onclick=()=>{gridPage--;loadGrid().catch(fail)};$('#gridNext').onclick=()=>{gridPage++;loadGrid().catch(fail)};
-$('#bulkEdit').onclick=async()=>{try{if(!selectedRows.size)throw Error('Select rows first');if(!await confirmAction(`Apply the entered value to ${selectedRows.size} selected records?`))return;await mutate('/records',{edits:[...selectedRows].map(record=>({record,field:$('#bulkField').value.toUpperCase(),value:$('#bulkValue').value,align:$('#editAlign').value,...($('#layoutBranch').value!==''?{branch:Number($('#layoutBranch').value)}:{})}))},'PATCH');await loadGrid();show('Bulk edits applied atomically.')}catch(e){fail(e)}};
-for(const action of ['undo','redo','reset'])$('#'+action).onclick=async()=>{try{if(action==='reset'&&!await confirmAction('Restore all original uploaded DAT bytes? This action is undoable.'))return;await mutate('/history/'+action,{});if(active==='editor')await loadGrid();show(action==='reset'?'Original DAT restored.':`${action} completed.`)}catch(e){fail(e)}};
-$('#hexView').onchange=()=>st&&renderBytes();$('#inspectByte').onclick=()=>refresh(Number($('#byteRecord').value)).catch(fail);
-$('#revalidate').onclick=async()=>{try{requireProject();const r=await request(api('/validate'),{method:'POST'});show(`${r.export_status.replaceAll('_',' ')} · byte round-trip ${r.round_trip_identical?'identical':'failed'}`);await refresh()}catch(e){fail(e)}};
-$('#generate').onclick=async()=>{try{requireProject();const r=await request(api('/generate'),{method:'POST',body:JSON.stringify({version:st.project.version,draft:$('#draftExport').checked})});st=r.state;render();show('DAT generated and re-parsed. The current output is ready to download.')}catch(e){fail(e)}};
-$('#downloadDat').onclick=()=>{try{download('/download')}catch(e){fail(e)}};$('#downloadOriginal').onclick=()=>{try{download('/download?original=true')}catch(e){fail(e)}};$('#downloadReport').onclick=()=>{try{download('/report')}catch(e){fail(e)}};$('#downloadAudit').onclick=()=>{try{download('/audit')}catch(e){fail(e)}};
-$('#testAI').onclick=async()=>{const b=$('#testAI');b.disabled=true;b.textContent='Testing connection…';try{await request('/api/ai/test',{method:'POST'});await loadAIStatus();show('Connection test finished. Review the model access result below.')}catch(e){fail(e);await loadAIStatus().catch(()=>{})}finally{b.disabled=false;b.textContent='Test AI connection'}};
-document.addEventListener('click',async e=>{const el=e.target.closest('button,[data-select-record]');if(!el)return;try{
-  if(el.dataset.pageLink)switchPage(el.dataset.pageLink);
-  if(el.dataset.openProject)await openProject(el.dataset.openProject);
-  if(el.dataset.deleteProject&&await confirmAction('Permanently delete this local project, including original files and history?')){await request(`/api/projects/${encodeURIComponent(el.dataset.deleteProject)}`,{method:'DELETE'});if(pid===el.dataset.deleteProject){pid=null;st=null;location.reload()}await listProjects()}
-  if(el.dataset.selectRecord)await refresh(Number(el.dataset.selectRecord));
-  if(el.dataset.editorRecord){await refresh(Number(el.dataset.editorRecord));switchPage('bytes')}
-  if(el.dataset.gotoByte){await refresh(Number(el.dataset.gotoByte));switchPage('bytes')}
-  if(el.dataset.review)await review([el.dataset.id],el.dataset.review);
-  if(el.dataset.schemaField){$('#columnSearch').value=el.dataset.schemaField;switchPage('editor')}
-  if(el.dataset.aiMap){$('#sheetSelect').value=el.dataset.aiSheet;renderSheet();const select=$$('[data-map]').find(x=>x.dataset.map===el.dataset.aiMap);if(select){select.value=el.dataset.aiField;show('Mapping selected. Choose its join keys and reconcile to confirm.')}}
-}catch(e){fail(e)}});
-document.addEventListener('change',e=>{const input=e.target;if(input.matches('[data-row-select]')){const n=Number(input.dataset.rowSelect);input.checked?selectedRows.add(n):selectedRows.delete(n);$('#gridIndex').textContent=`Page ${gridPage} · ${selectedRows.size} selected`}if(input.matches('[data-cell]'))saveCell(input).catch(fail)});
-document.addEventListener('keydown',async e=>{
-  if(active==='editor'&&(e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();$('#'+(e.shiftKey?'redo':'undo')).click();return}
-  const input=e.target;if(!input.matches('[data-cell]'))return;
-  if(e.key==='Escape'){input.value=input.dataset.original;input.blur();return}
-  const cells=$$('[data-cell]'),i=cells.indexOf(input);let target=null;
-  if(e.key==='ArrowUp'||e.key==='ArrowDown'){
-    const rows=$$('#gridBody tr'),rowIndex=rows.indexOf(input.closest('tr')),next=rows[rowIndex+(e.key==='ArrowUp'?-1:1)];
-    if(next){const candidates=Array.from(next.querySelectorAll('[data-cell]'));target=candidates.find(x=>x.dataset.field===input.dataset.field&&x.dataset.branch===input.dataset.branch)||candidates.find(x=>x.dataset.field===input.dataset.field)||candidates[0]}
-  }else if(e.key==='Enter'||e.key==='Tab'||((e.ctrlKey||e.metaKey)&&['ArrowLeft','ArrowRight'].includes(e.key))){
-    const step=e.shiftKey||e.key==='ArrowLeft'?-1:1;target=cells[Math.max(0,Math.min(cells.length-1,i+step))];
-  }else return;
-  e.preventDefault();const destination=target?{...target.dataset}:null;
-  try{await saveCell(input);if(destination){const fresh=$$('[data-cell]').find(x=>x.dataset.record===destination.record&&x.dataset.field===destination.field&&x.dataset.branch===destination.branch);fresh?.focus()}}catch(err){fail(err)}
+$$('[data-stage]').forEach(button => button.addEventListener('click', () => setStage(button.dataset.stage)));
+$('#dismissNotice').onclick = () => $('#notice').classList.add('hidden');
+$('#loginForm').onsubmit = event => { event.preventDefault(); withBusy(event.submitter,'Signing in…',async () => { await request('/api/session',{method:'POST',body:JSON.stringify({access_token:$('#accessToken').value})}); $('#accessToken').value=''; await initialize(); }); };
+$('#newProjectButton').onclick = async () => {
+  if ((specDirty || valueEdits.size || batchSpecDirty) && !await confirmAction('Leave unsaved changes and start a new project?')) return;
+  clearTimeout(pollTimer); state=null; projectId=null; draftFields=[]; draftOptions={}; draftLayouts=[]; specDirty=false; valueEdits.clear(); batchState=null; batchSpecId=null; batchSpecDraft=null; batchSpecDirty=false; batchSpecEditing=false; batchDatId=null; batchRecords=[]; batchRecord=null; batchRecordDetail=null; batchOffset=0; batchTotal=0; batchFieldId=null; stage='upload';
+  $('#projectName').value=''; $('#uploadForm').reset(); $('#batchProjectName').value=''; $('#batchUploadForm').reset(); render(); await listProjects(); $('#projectName').focus();
+};
+$('#refreshProject').onclick = () => withBusy($('#refreshProject'),'Refreshing…',async () => {
+  if ((specDirty || valueEdits.size || batchSpecDirty) && !await confirmAction('Discard unsaved changes and reload the saved project?')) return;
+  specDirty=false;valueEdits.clear();batchSpecDirty=false;await refreshProject();if(stage==='batch')await loadBatch();notify('Saved project reloaded.');
 });
-initialize().catch(fail);
+for (const [input,label] of [['specFile','specFileLabel'],['datFile','datFileLabel']]) $('#'+input).onchange = () => { $('#'+label).textContent=$('#'+input).files[0]?.name || 'No file selected'; };
+$('#uploadForm').onsubmit = event => {
+  event.preventDefault();
+  withBusy($('#uploadButton'),'Uploading files…',async () => {
+    if (state?.document) throw Error('Start a new project to upload another source set.');
+    if (!projectId) { const created=await request('/api/projects',{method:'POST',body:JSON.stringify({name:$('#projectName').value.trim()})}); projectId=created.project.id; state=created; }
+    const files=new FormData();files.set('spec',$('#specFile').files[0]);files.set('dat',$('#datFile').files[0]);files.set('version',state.project.version);files.set('encoding',$('#encoding').value);
+    $('#uploadProgress').classList.remove('hidden');$('#uploadProgress').removeAttribute('value');
+    try { applyState(await request(projectPath('/files'),{method:'POST',body:files}));stage='spec';render();await listProjects();notify('Files uploaded. Interpret the specification, then review and approve its fields.'); }
+    finally { $('#uploadProgress').classList.add('hidden'); }
+  });
+};
+for (const [input,label] of [['batchSpecFiles','batchSpecFileLabel'],['batchDatFiles','batchDatFileLabel']]) $('#'+input).onchange = () => { const files=$('#'+input).files; $('#'+label).textContent = files.length ? [...files].map(file=>file.name).join(' · ') : 'No files selected'; };
+$('#batchUploadForm').onsubmit = event => {
+  event.preventDefault();
+  withBusy($('#batchUploadButton'),'Uploading…',async () => {
+    const specs=[...$('#batchSpecFiles').files], dats=[...$('#batchDatFiles').files];
+    if (!specs.length && !dats.length) throw Error('Choose at least one specification or DAT file.');
+    if (!projectId) { const created=await request('/api/projects',{method:'POST',body:JSON.stringify({name:$('#batchProjectName').value.trim()})}); state=created.state||created; projectId=state.project.id; }
+    if (!batchState) await loadBatch();
+    const files=new FormData();
+    specs.forEach(file=>files.append('specs',file));dats.forEach(file=>files.append('dats',file));
+    files.set('version',batchState.project.version);files.set('encoding',$('#batchEncoding').value);
+    acceptBatch(await request(batchPath('/files'),{method:'POST',body:files}));
+    $('#batchSpecFiles').value='';$('#batchDatFiles').value='';$('#batchSpecFileLabel').textContent='No specifications selected';$('#batchDatFileLabel').textContent='No DAT files selected';
+    await listProjects();notify('Files uploaded. Review and approve specifications, then assign their layouts to DAT files.');
+  });
+};
+$('#batchSpecSelect').onchange = event => {if(batchSpecDirty){notify('Save the current specification draft before selecting another.',true);event.target.value=batchSpecId;return;}batchSpecId=event.target.value;batchSpecEditing=false;batchSpecDraft=null;renderBatch();};
+$('#batchEditSpec').onclick = async () => {if(!await confirmAction('Revise this approved specification? Saving a new draft requires review and approval again, and previous exports must be regenerated.'))return;batchSpecEditing=true;renderBatch();};
+$('#batchSaveSpec').onclick = () => withBusy($('#batchSaveSpec'),'Saving…',async () => {const spec=chosenBatchSpec();if(!spec||!batchSpecDraft)return;await batchAction(`/specs/${encodeURIComponent(spec.id)}`,{fields:batchSpecDraft.fields,layouts:batchSpecDraft.layouts,options:batchSpecDraft.options},'PUT');batchSpecDirty=false;batchSpecEditing=false;await loadBatch();notify('Specification draft saved. Approval and previous generated outputs are invalidated.');});
+$('#batchApproveSpec').onclick = () => withBusy($('#batchApproveSpec'),'Approving…',async () => {const spec=chosenBatchSpec();if(!spec)return;if(!await confirmAction(`Approve ${spec.name} version ${spec.version} and its routing rules for this batch?`))return;await batchAction(`/specs/${encodeURIComponent(spec.id)}/approve`);notify('Specification approved. Assign its layouts to DAT files before analysis.');});
+$('#batchSaveAssociations').onclick = () => withBusy($('#batchSaveAssociations'),'Saving…',async () => {const groups=new Map();$$('[data-batch-layout-id]:checked').forEach(input=>{const key=`${input.dataset.batchDatId}:${input.dataset.batchSpecId}`;if(!groups.has(key))groups.set(key,{dat_id:input.dataset.batchDatId,spec_id:input.dataset.batchSpecId,layout_ids:[]});groups.get(key).layout_ids.push(input.dataset.batchLayoutId);});await batchAction('/associations',{associations:[...groups.values()]},'PUT');notify('Explicit DAT-to-specification associations saved.');});
+$('#batchProcess').onclick = () => withBusy($('#batchProcess'),'Analyzing…',async () => {await batchAction('/process');await loadBatchRecords();notify('Batch analyzed. Review every unresolved record before export.');});
+$('#batchAi').onclick = () => withBusy($('#batchAi'),'Auditing…',async () => {try{await batchAction('/ai');notify('AI audit completed. Deterministic checks still control export.');}catch(error){await loadBatch();throw error;}});
+$('#batchGenerate').onclick = () => withBusy($('#batchGenerate'),'Validating…',async () => {await batchAction('/generate');notify('Export eligibility recalculated. Download only files marked eligible.');});
+async function batchDownload(path) {const response=await fetch(batchPath(path),{headers:{'X-Studio-Request':'1'}});if(!response.ok){const body=await response.json().catch(()=>null);throw Error(errorMessage(body?.detail||body));}const blob=await response.blob();const name=response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1]||'batch-export';const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+$('#batchDownloadArchive').onclick = () => withBusy($('#batchDownloadArchive'),'Preparing archive…',()=>batchDownload('/archive'));
+$('#closeBatchRules').onclick=$('#cancelBatchRules').onclick=()=>$('#batchRuleDialog').close();
+$('#saveBatchRules').onclick=saveBatchRules;
+$('#batchPreviousRecords').onclick = () => withBusy($('#batchPreviousRecords'),'Loading…',async()=>{batchOffset=Math.max(0,batchOffset-100);await loadBatchRecords();});
+$('#batchNextRecords').onclick = () => withBusy($('#batchNextRecords'),'Loading…',async()=>{batchOffset+=100;await loadBatchRecords();});
+$('#saveSpecButton').onclick = () => withBusy($('#saveSpecButton'),'Saving…',saveSpec);
+$('#analyzeSpecButton').onclick = () => withBusy($('#analyzeSpecButton'),'Starting interpretation…',async () => { await saveSpec(); await action('/analyze-spec');notify('Specification interpretation submitted. You can follow its progress above.'); });
+$('#approveSpecButton').onclick = () => withBusy($('#approveSpecButton'),'Approving…',async () => {
+  if (state.spec.approved && !specDirty) {setStage('dat');return;}
+  if (!await confirmAction('Approve this specification as the rules for reading and formatting the DAT? Review examples, positions and uncertain rules first.')) return;
+  await saveSpec();await action('/approve');stage='dat';render();notify('Specification approved. Analyze the DAT to review actual field values.');
+});
+$('#editSpecButton').onclick = () => setStage('spec');
+$('#analyzeDatButton').onclick = () => withBusy($('#analyzeDatButton'),'Starting analysis…',async () => {await saveValues();await action('/analyze-dat');notify('DAT analysis submitted. Every record will also receive local validation.');});
+$('#saveValuesButton').onclick = () => withBusy($('#saveValuesButton'),'Saving values…',saveValues);
+for (const actionName of ['undo','redo']) $('#'+actionName+'Button').onclick = () => withBusy($('#'+actionName+'Button'),actionName==='undo'?'Undoing…':'Redoing…',async () => {
+  if (specDirty || valueEdits.size) {if(!await confirmAction('Discard unsaved changes before restoring saved history?'))return;specDirty=false;valueEdits.clear();}
+  await action('/history/'+actionName);notify(actionName==='undo'?'Previous saved work restored.':'Saved change restored.');
+});
+$('#fieldSearch').oninput = renderTable;$('#issuesOnly').onchange = renderTable;
+$('#applyBulkMandatory').onclick = async () => {
+  const value = $('#bulkMandatory').value;
+  if (!value) { notify('Choose Yes, No, or Unknown first.', true); return; }
+  const search = $('#fieldSearch').value.toLowerCase();
+  const selected = draftFields.filter(field => !search || `${field.field_name} ${field.category_functional_group}`.toLowerCase().includes(search));
+  if (!selected.length) { notify('No fields match the current filter.', true); return; }
+  if (!await confirmAction(`Set mandatory status to ${value} for ${selected.length} filtered fields? This changes the specification draft.`)) return;
+  for (const field of selected) { field.mandatory = value; field.rules.required = value === 'YES' ? true : value === 'NO' ? false : null; }
+  specDirty = true; render(); notify(`Updated ${selected.length} draft fields. Save and review the specification before approval.`);
+};
+$('#ackUnknownMandatory').onchange = event => {
+  draftOptions.acknowledge_unknown_mandatory = event.target.checked;
+  specDirty = true; renderReviewStatus(); renderButtons();
+};
+$('#recordNumber').onchange = () => withBusy(null,'',() => changeRecord(Number($('#recordNumber').value)));
+$('#previousRecord').onclick = () => withBusy(null,'',() => changeRecord(state.review.record.number-1));
+$('#nextRecord').onclick = () => withBusy(null,'',() => changeRecord(state.review.record.number+1));
+$('#nextIssue').onclick = () => withBusy($('#nextIssue'),'Finding issue…',nextIssue);
+$('#generateButton').onclick = () => withBusy($('#generateButton'),'Validating current DAT…',async () => {await saveValues();await action('/generate');notify('The output was formatted and validated. Review the result before downloading.');});
+$('#downloadOriginal').onclick = () => {requireProject();window.location.assign(projectPath('/download?original=true'));};
+$('#downloadSpec').onclick = () => {requireProject();window.location.assign(projectPath('/approved-spec'));};
+$('#downloadReport').onclick = () => {requireProject();window.location.assign(projectPath('/report'));};
+$('#downloadAudit').onclick = () => {requireProject();window.location.assign(projectPath('/audit'));};
+$('#downloadDat').onclick = () => {requireProject();window.location.assign(projectPath('/download'));};
+$('#closeDetail').onclick = $('#cancelDetail').onclick = () => $('#detailDialog').close();$('#saveRulesButton').onclick=applyRuleEdits;
+
+document.addEventListener('click', event => {
+  const batchButton=event.target.closest('button');
+  if(batchButton?.dataset.batchSpec){if(batchSpecDirty){notify('Save the current specification draft before selecting another.',true);return;}batchSpecId=batchButton.dataset.batchSpec;batchSpecDraft=null;batchSpecEditing=false;renderBatch();return;}
+  if(batchButton?.dataset.batchDat){batchDatId=batchButton.dataset.batchDat;batchRecords=[];batchRecord=null;batchRecordDetail=null;batchOffset=0;batchTotal=0;renderBatch();withBusy(null,'',loadBatchRecords);return;}
+  if(batchButton?.dataset.batchRecord!==undefined){withBusy(batchButton,'Loading…',()=>selectBatchRecord(Number(batchButton.dataset.batchRecord)));return;}
+  if(batchButton?.dataset.batchFieldEvidence){batchFieldId=batchButton.dataset.batchFieldEvidence;renderBatchRecords();return;}
+  if(batchButton?.dataset.batchDownload){withBusy(batchButton,'Downloading…',()=>batchDownload(`/download/${encodeURIComponent(batchButton.dataset.batchDownload)}`));return;}
+  if(batchButton?.dataset.batchOriginal){withBusy(batchButton,'Downloading…',()=>batchDownload(`/download/${encodeURIComponent(batchButton.dataset.batchOriginal)}?original=true`));return;}
+  if(batchButton?.dataset.batchSpecSource){withBusy(batchButton,'Downloading…',()=>batchDownload(`/specs/${encodeURIComponent(batchButton.dataset.batchSpecSource)}/source`));return;}
+  if(batchButton?.id==='batchSaveAiDecision'){withBusy(batchButton,'Saving…',async()=>{const record=batchRecordDetail,reason=$('#batchAiReason')?.value.trim();if(!record||!reason||reason.length<3)throw Error('Explain the AI review decision in at least three characters.');const evidence=record.ai_review?.evidence_id||record.evidence_id;if(!evidence)throw Error('AI evidence identifier is unavailable; rerun the audit.');await batchAction(`/records/${encodeURIComponent(batchDatId)}/${record.number}/ai-decision`,{evidence_id:evidence,decision:$('#batchAiDecision').value,reason});await selectBatchRecord(batchRecord);notify('AI review decision saved. Export still depends on deterministic validation.');});return;}
+  if(batchButton?.dataset.batchAddCondition!==undefined){const layout=batchSpecDraft?.layouts?.[Number(batchButton.dataset.batchAddCondition)];if(!layout)return;layout.when=layout.when||[];layout.when.push({start:1,end:1,equals:''});batchSpecDirty=true;renderBatch();return;}
+  if(batchButton?.dataset.batchRuleIndex!==undefined){openBatchRules(Number(batchButton.dataset.batchRuleIndex));return;}
+  const row = event.target.closest('[data-field-row]');
+  if (row) { selectedFieldId = row.dataset.fieldRow; renderFieldContext(); }
+  const button=event.target.closest('button');if(!button)return;
+  if(button.dataset.openProject)withBusy(button,'Opening…',()=>openProject(button.dataset.openProject));
+  if(button.dataset.addCondition!==undefined){draftLayouts[Number(button.dataset.addCondition)].when.push({start:1,end:2,equals:''});specDirty=true;renderFileRules();renderReviewStatus();renderButtons();}
+  if(button.dataset.removeCondition){const [layout,index]=button.dataset.removeCondition.split(':').map(Number);draftLayouts[layout].when.splice(index,1);specDirty=true;renderFileRules();renderReviewStatus();renderButtons();}
+  if(button.dataset.details)openDetails(button.dataset.details);
+  if(button.dataset.focusValue)$$('[data-value-field]').find(input=>input.dataset.valueField===button.dataset.focusValue)?.focus();
+  if(button.dataset.confirmBoundary)withBusy(button,'Confirming…',async()=>{if(!await confirmAction('Confirm that you have reviewed this record’s source field boundaries? This does not approve other failed checks.'))return;await saveValues();await action('/confirm',{record:Number(button.dataset.confirmBoundary)});notify('Source interpretation confirmed. Review any remaining failed checks.');});
+  if(button.dataset.rejectAi)withBusy(button,'Saving decision…',async()=>{const reason=window.prompt('Why do you reject this AI advice? The deterministic checks will still apply.');if(!reason||reason.trim().length<3)return;await action('/ai-decision',{record:Number(button.dataset.aiRecord),evidence_id:button.dataset.rejectAi,decision:'reject',reason:reason.trim()});notify('AI decision saved. Deterministic checks still control export.');});
+  if(button.dataset.stage && !button.classList.contains('nav-item') && !button.classList.contains('stage-step'))setStage(button.dataset.stage);
+});
+document.addEventListener('input', event => {
+  const input=event.target;
+  if(input.dataset.batchField!==undefined){const field=batchSpecDraft?.fields?.[Number(input.dataset.batchField)];if(!field)return;field[input.dataset.batchColumn]=input.value;if(input.dataset.batchColumn==='mandatory'&&field.rules)field.rules.required=input.value==='YES'?true:input.value==='NO'?false:null;batchSpecDirty=true;input.classList.add('changed');$('#batchSpecStatus').textContent='Unsaved specification changes. Save the draft before approval.';$('#batchSaveSpec').disabled=false;return;}
+  if(input.dataset.batchLayout!==undefined){const condition=batchSpecDraft?.layouts?.[Number(input.dataset.batchLayout)]?.when?.[Number(input.dataset.batchCondition)];if(!condition)return;const key=input.dataset.batchKey;condition[key]=key==='equals'?input.value:Number(input.value);batchSpecDirty=true;$('#batchSaveSpec').disabled=false;return;}
+  if(input.matches('[data-spec-field]')){
+    const field=draftFields.find(item=>item.id===input.dataset.specField);if(!field)return;
+    field[input.dataset.column]=input.value;specDirty=true;input.classList.add('changed');
+    if(input.dataset.column==='mandatory') field.rules.required = input.value==='YES' ? true : input.value==='NO' ? false : null;
+    $('#saveStatus').textContent='Unsaved changes';$('#saveStatus').className='status-tag dirty';$('#pendingEdits').textContent='Specification draft changed';renderButtons();
+  }
+  if(input.matches('[data-value-field]')){
+    const result=reviewField(input.dataset.valueField);if(!result)return;
+    const record=state.review.record.number,key=`${record}:${result.id}`;
+    if(input.value===(result.value??''))valueEdits.delete(key);else valueEdits.set(key,{record,field_id:result.id,value:input.value});
+    input.classList.toggle('changed',valueEdits.has(key));$('#saveStatus').textContent=valueEdits.size?'Unsaved changes':`Saved · version ${state.project.version}`;$('#saveStatus').className=`status-tag ${valueEdits.size?'dirty':'saved'}`;$('#pendingEdits').textContent=`${valueEdits.size} value change(s) to save`;renderButtons();renderGeneration();
+  }
+});
+document.addEventListener('change', async event => {
+  const input=event.target;
+  if(input.id==='batchAckUnknown'&&batchSpecDraft){batchSpecDraft.options=batchSpecDraft.options||{};batchSpecDraft.options.acknowledge_unknown_mandatory=input.checked;batchSpecDirty=true;$('#batchSaveSpec').disabled=false;return;}
+  if(input.matches('[data-spec-field][data-column="mandatory"]')){input.dispatchEvent(new Event('input',{bubbles:true}));renderReviewStatus();return;}
+  if(input.dataset.option){const key=input.dataset.option;if(key==='unknown_records'&&input.value==='preserve'&&!await confirmAction('Preserve every unrecognized record exactly as uploaded? These records will not be validated against field rules. This policy takes effect only after specification approval.')){input.value=draftOptions[key]||'block';return;}if(key==='record_length'){if(input.value)draftOptions[key]=Number(input.value);else delete draftOptions[key];}else draftOptions[key]=input.value;specDirty=true;renderReviewStatus();renderButtons();$('#saveStatus').textContent='Unsaved changes';$('#saveStatus').className='status-tag dirty';return;}
+  if(input.dataset.layoutIndex!==undefined){const layout=draftLayouts[Number(input.dataset.layoutIndex)];if(input.dataset.conditionIndex!==undefined){const key=input.dataset.conditionKey;layout.when[Number(input.dataset.conditionIndex)][key]=key==='equals'?input.value:Number(input.value);}else{const key=input.dataset.layoutKey;layout[key]=key==='record_length'?Number(input.value):input.value;}specDirty=true;renderReviewStatus();renderButtons();$('#saveStatus').textContent='Unsaved changes';$('#saveStatus').className='status-tag dirty';return;}
+  if(!input.matches('[data-value-field]'))return;
+  const normalized=input.value.replace(/^ +| +$/g,'');if(normalized!==input.value){input.value=normalized;input.dispatchEvent(new Event('input',{bubbles:true}));notify('Surrounding spaces removed. The approved specification applies field padding.');}
+});
+document.addEventListener('keydown', event => {
+  const input=event.target;
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();(stage==='spec'?$('#saveSpecButton'):$('#saveValuesButton')).click();return;}
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!input.matches('input,textarea')){event.preventDefault();$('#'+(event.shiftKey?'redoButton':'undoButton')).click();return;}
+  if(!input.matches('[data-value-field],[data-spec-field]'))return;
+  if(event.key==='Escape'){input.blur();return;}
+  if(!['Enter','ArrowUp','ArrowDown'].includes(event.key)||event.key==='Enter'&&event.shiftKey)return;
+  if(input.matches('[data-spec-field]')&&event.key!=='Enter')return;
+  event.preventDefault();const inputs=$$(input.matches('[data-value-field]')?'[data-value-field]':'[data-spec-field]');const index=inputs.indexOf(input);const next=inputs[index+(event.key==='ArrowUp'?-1:1)];next?.focus();
+});
+window.addEventListener('beforeunload',event=>{if(specDirty||valueEdits.size||batchSpecDirty){event.preventDefault();event.returnValue='';}});
+async function initialize(){
+  const session=await request('/api/session');
+  if(!session.authenticated){if(session.login_required){$('#loginPanel').classList.remove('hidden');$('#application').classList.add('hidden');return;}await request('/api/session',{method:'POST',body:'{}'});}
+  $('#loginPanel').classList.add('hidden');$('#application').classList.remove('hidden');render();await listProjects();
+  try {const ai=await request('/api/ai/status');$('#providerSummary').textContent=`Bedrock · ${ai.ai_available===false?'unavailable':ai.model_id||'not configured'}`;}catch{$('#providerSummary').textContent='AI connection not verified';}
+}
+initialize().catch(error=>notify(error.message,true));

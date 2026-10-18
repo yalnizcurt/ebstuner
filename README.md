@@ -2,7 +2,7 @@
 
 A preparation and repair workstation for teams receiving fixed-width DAT files before an Oracle SQL*Loader/EBS import. Load a CTL and DAT, see which bytes belong to each field, locate damaged records, compare reference evidence, approve corrections and download the reviewed DAT plus its audit. The original file stays available byte for byte.
 
-Groq with `openai/gpt-oss-120b` is the default AI provider. AI explains findings and proposes evidence-backed changes; the deterministic engine controls bytes, validation and approvals. Bedrock remains an explicit alternative. No cloud account is needed to inspect, edit or generate files.
+Amazon Bedrock is the production AI provider. Groq is available only when `APP_ENV=development` and explicitly selected. AI explains findings and proposes changes; deterministic checks control bytes, validation and approvals. Neither provider is needed for the offline validation tests.
 
 The job ends at a reviewed file. The workstation does not submit an EBS concurrent request, run SQL*Loader, check database constraints or certify that EBS will accept a transaction.
 
@@ -47,23 +47,29 @@ All examples are synthetic custom `XX` staging layouts. They are inspired by EBS
 
 The supplied CSV intentionally differs in some identifier formatting and should be treated as evidence requiring review. A structurally valid file can still contain incorrect business values.
 
-## Configure Groq
+## Configure Amazon Bedrock
 
-Keep the key in the backend environment or private `.env`, never in browser code or a committed file:
+Use the AWS default credential chain (for example, an IAM role) and set the region and model on the backend:
 
 ```dotenv
-LLM_PROVIDER=groq
-GROQ_API_KEY=your_private_key
-GROQ_MODEL=openai/gpt-oss-120b
+LLM_PROVIDER=bedrock
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=your_available_model_id
 ```
 
-Restart the backend after changing `.env`, then use the configuration screen to test the connection. A live synthetic connection test succeeded with the configured model on 17 October 2026. This establishes API/model access, not the accuracy of every proposed repair.
+Restart the backend after changing `.env`, then use the configuration screen to test the connection. A short lived backend bearer token or managed token file is also supported. Credentials never enter browser code.
 
-Groq requests use strict JSON Schema output and server-side response validation. Defaults are 4,096 output tokens, temperature 0, a 60-second request budget and two transient-error retries. `GROQ_ENABLED=false` disables AI. There is no automatic provider fallback. See [Groq setup and limits](docs/GROQ.md), including official model and API references.
+Bedrock requests use strict JSON Schema output and server-side response validation. There is no provider fallback. See [Bedrock setup](docs/BEDROCK.md).
 
 The five capabilities are schema intelligence, header mapping, corruption investigation, evidence-backed recovery and validation explanation. Values are masked by default. An explicit checkbox shares the selected record's fields and uniquely matched evidence. Recovery without evidence returns `INSUFFICIENT_EVIDENCE` locally without a model call. An AI proposal cannot apply itself.
 
-To select Bedrock instead, set `LLM_PROVIDER=bedrock` and its backend AWS variables. Bedrock retains its managed token-file rotation and production credential checks. See [Bedrock setup](docs/BEDROCK.md).
+The specification-first studio uses the selected permitted provider for specification interpretation and independent DAT review. Unedited source bytes can change automatically only when TASAA certifies structural padding ownership; other changes require an explicit field edit and final validation.
+
+## Multi-file batch workspace
+
+Open **Batch workspace** to upload several CSV/XLSX specifications and DAT files into one project. Review and approve each specification, add explicit record-identifier conditions for mixed layouts, then select which approved layouts apply to each DAT. The workspace shows routing, record findings, AI status and byte evidence. Run batch analysis and AI audit, resolve AI findings with recorded decisions, then validate exports. Download eligible DAT files individually or as an archive with validation reports and a manifest naming blocked files. Ambiguous or unknown records retain their original bytes and block validated export for their file; another eligible file can still be exported.
+
+The current batch limits are 16 MB total original source bytes per project, 2 MB per specification, 12 MB per DAT, and 20,000 records per DAT. Batch AI runs synchronously per record and needs an available authorized provider. See [independent release verification](docs/CODEX_RELEASE_VERIFICATION.md) for tested cases and remaining deployment gates.
 
 ## Tests and evaluation
 
@@ -73,7 +79,9 @@ To select Bedrock instead, set `LLM_PROVIDER=bedrock` and its backend AWS variab
 .venv/bin/python build_samples.py
 ```
 
-The 17 October 2026 regression run passed **145 tests**, with one optional live Bedrock test skipped. Automated provider tests use explicit synthetic mocks; Bedrock also has an offline native SDK bearer-signing check. The live Bedrock test is skipped unless `RUN_LIVE_BEDROCK=1` is set with a working configured key and model. Actual Groq explanation and evidence-backed recovery were separately verified against synthetic samples; see the [live workflow evidence](docs/groq-workflow-verification.json).
+Live Groq tests are skipped by default. Run them deliberately with `RUN_LIVE_GROQ_TESTS=1 .venv/bin/python -m pytest -q tests/test_groq_live.py` when a development key and network access are available. The browser test starts a local server and needs loopback bind permission.
+
+Automated Bedrock tests use synthetic responses and do not invoke the service. A live Bedrock acceptance run still requires a configured AWS account and approved model access. Groq results establish development connectivity only; they do not establish Bedrock or Oracle EBS acceptance.
 
 The sample manifest records expected findings, record lengths and checksums; `build_samples.py` regenerates the synthetic library. The older evaluation writes computed metrics to `docs/evaluation-results.json`. Historical results in the engineering report are dated and must not be treated as measurements of the new Groq integration. The corpus measures structural validity and exact reconstruction separately. A valid reconstruction may still be a wrong hypothesis, which is why every candidate requires approval.
 
@@ -98,7 +106,7 @@ docker compose up --build
 
 Compose publishes only to `127.0.0.1:8000` and stores projects in a named volume. The container runs as a non-root user. Docker configuration is supplied; the current host has no Docker executable, so an image build has not been verified here.
 
-For deployment, put the same-origin frontend/backend behind a TLS reverse proxy and organizational authentication. Set `STUDIO_ENV=production`, a private `STUDIO_ACCESS_TOKEN` of at least 32 characters, `STUDIO_ALLOWED_HOSTS`, an HTTPS `STUDIO_PUBLIC_ORIGIN`, private persistent storage, and credentials for the selected provider. Production Bedrock AI additionally requires its managed short-term token file. The backend refuses incomplete production configuration. The shared token is an additional gate, not an enterprise identity system. See [security and deployment](docs/SECURITY.md).
+For deployment, put the same-origin frontend/backend behind a TLS reverse proxy and organizational authentication. Set `STUDIO_ENV=production`, a private `STUDIO_ACCESS_TOKEN` of at least 32 characters, `STUDIO_ALLOWED_HOSTS`, an HTTPS `STUDIO_PUBLIC_ORIGIN`, private persistent storage, and AWS credentials through IAM or managed backend tokens. The shared token is an additional gate, not an enterprise identity system. See [security and deployment](docs/SECURITY.md).
 
 ## Scope and documentation
 

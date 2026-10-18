@@ -4,6 +4,7 @@ import pytest
 import ai
 from bedrock import AIError, AmazonBedrockProvider
 from groq_provider import ENDPOINT, GroqProvider
+from groq_budget import GroqCoordinator
 
 PAYLOAD = {'status': 'OK', 'summary': 'Synthetic review', 'proposals': [], 'mappings': [], 'observations': []}
 TOKEN = 'synthetic-groq-test-token'
@@ -24,7 +25,7 @@ def response(payload=PAYLOAD, finish='stop', **extra):
 
 def provider(handler):
     client = httpx.Client(transport=httpx.MockTransport(handler), trust_env=False)
-    return GroqProvider(lambda settings: client), client
+    return GroqProvider(lambda settings: client, coordinator=GroqCoordinator(':memory:')), client
 
 
 def test_strict_schema_requested_model_fixed_endpoint_and_private_header(monkeypatch):
@@ -90,29 +91,30 @@ def test_connection_status_tracks_key_rotation_without_exposing_credentials(monk
     assert 'rotated-synthetic-token' not in json.dumps(status)
 
 
-def test_retries_are_bounded_by_attempts_and_total_time(monkeypatch):
-    now = [0.0]; calls = []; sleeps = []
-    monkeypatch.setattr('groq_provider.time.monotonic', lambda: now[0])
-    monkeypatch.setattr('groq_provider.time.sleep', lambda seconds: (sleeps.append(seconds), now.__setitem__(0, now[0] + seconds)))
+def test_retries_return_shared_cooldown_without_sleeping_worker(monkeypatch):
+    calls = []
+    monkeypatch.setattr('groq_provider.time.sleep', lambda seconds: pytest.fail('worker must reschedule instead of sleeping'))
     monkeypatch.setenv('GROQ_MAX_RETRIES', '3')
     monkeypatch.setenv('GROQ_TIMEOUT_SECONDS', '5')
     def handler(request):
         calls.append(request)
-        return httpx.Response(429, text='busy')
+        return httpx.Response(429, text='busy', headers={'retry-after': '120'})
     instance, client = provider(handler)
     with pytest.raises(AIError) as caught: instance.invoke('explain', {})
     assert caught.value.code == 'GROQ_429'
-    assert len(calls) == 3 and sleeps == [1, 2] and now[0] < 5 and client.is_closed
+    assert caught.value.retryable and caught.value.retry_after == 120
+    assert len(calls) == 1 and client.is_closed
 
 
-def test_transient_server_failure_can_retry_successfully(monkeypatch):
+def test_transient_server_failure_requires_queue_reschedule(monkeypatch):
     calls = []
     monkeypatch.setattr('groq_provider.time.sleep', lambda seconds: None)
     def handler(request):
         calls.append(request)
         return httpx.Response(503) if len(calls) == 1 else httpx.Response(200, json=response())
     instance, _ = provider(handler)
-    assert instance.invoke('explain', {})['result']['status'] == 'OK' and len(calls) == 2
+    with pytest.raises(AIError) as caught: instance.invoke('explain', {})
+    assert caught.value.code == 'GROQ_503' and caught.value.retryable and len(calls) == 1
 
 
 @pytest.mark.parametrize('error,code', [(httpx.ReadTimeout('private request details'), 'TIMEOUT'),
@@ -155,9 +157,15 @@ def test_environment_loader_uses_private_file_without_overriding_process(tmp_pat
 
 
 def test_provider_selection_is_explicit_with_no_fallback(monkeypatch):
-    monkeypatch.delenv('LLM_PROVIDER', raising=False)
+    monkeypatch.setenv('APP_ENV', 'development')
+    monkeypatch.setenv('LLM_PROVIDER', 'groq')
     assert isinstance(ai.configured_provider(), GroqProvider)
     monkeypatch.setenv('LLM_PROVIDER', 'bedrock')
     assert isinstance(ai.configured_provider(), AmazonBedrockProvider)
     monkeypatch.setenv('LLM_PROVIDER', 'unknown')
     with pytest.raises(AIError, match='LLM_PROVIDER'): ai.configured_provider()
+
+    # Verify production rejects groq
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('LLM_PROVIDER', 'groq')
+    with pytest.raises(AIError, match='Amazon Bedrock only'): ai.configured_provider()

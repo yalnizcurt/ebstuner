@@ -4,6 +4,8 @@ from datetime import datetime, timezone, timedelta
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
 from bedrock import AmazonBedrockProvider, AIError
+from ai import configured_provider
+from studio import DATAnalysis
 from projects import Repository, accept_ai_result, data_of, options, reconcile_project
 from web import install_files
 
@@ -34,6 +36,24 @@ def test_converse_structured_schema_and_no_secret_payload(env):
     assert 'synthetic-test-token' not in json.dumps(call)
     assert result['usage']=={'inputTokens':10,'outputTokens':20}
     assert result['estimated_cost_usd'] is None and client.closed
+
+
+def test_studio_structured_review_uses_bedrock_and_validates_contract(env, monkeypatch):
+    monkeypatch.delenv('LLM_PROVIDER', raising=False)
+    assert isinstance(configured_provider(), AmazonBedrockProvider)
+    payload = {'summary': 'Review needed', 'findings': [], 'observations': []}
+    client = Client(payload)
+    provider = AmazonBedrockProvider(lambda c: client)
+    batches = provider.batches('studio_dat', [{'record': i} for i in range(20)], DATAnalysis, 'Review', max_items=8)
+    assert [len(b['items']) for b in batches] == [8, 8, 4]
+    run = provider.invoke_structured('studio_dat', batches[0], DATAnalysis, 'Review evidence', scope='owner/project/version')
+    assert run['provider'] == 'BEDROCK' and run['result'] == payload
+    assert 'Review evidence' in client.calls[0]['system'][0]['text']
+    with pytest.raises(AIError, match='invalid response schema'):
+        AmazonBedrockProvider(lambda c: Client(PAYLOAD)).invoke_structured('studio_dat', {}, DATAnalysis, 'Review', scope='owner/project/version')
+    monkeypatch.setenv('LLM_PROVIDER', 'groq')
+    with pytest.raises(AIError, match='Amazon Bedrock only'):
+        configured_provider()
 
 
 def test_connection_test_tracks_model_and_rotation(env,monkeypatch):
@@ -80,7 +100,7 @@ def test_disabled_and_missing_credentials_deterministic_only(env,monkeypatch):
     p=AmazonBedrockProvider(lambda c:pytest.fail('must not invoke'))
     with pytest.raises(AIError,match='disabled'):p.invoke('schema',{})
     monkeypatch.setenv('BEDROCK_ENABLED','true');monkeypatch.delenv('AWS_BEARER_TOKEN_BEDROCK')
-    assert not p.status()['configured']
+    assert p.status()['configured'] and p.status()['credential_mode'] == 'aws_default_chain'
 
 
 def test_native_sdk_bearer_signing_and_isolated_rotation(env,tmp_path,monkeypatch):
@@ -99,7 +119,12 @@ def test_native_sdk_bearer_signing_and_isolated_rotation(env,tmp_path,monkeypatc
     rotate('rotated-synthetic-token');assert p.settings()['token']=='rotated-synthetic-token'
     assert os.environ['AWS_BEARER_TOKEN_BEDROCK']=='synthetic-test-token'
     monkeypatch.setenv('STUDIO_ENV','production');monkeypatch.delenv('BEDROCK_TOKEN_FILE')
-    with pytest.raises(AIError,match='Production AI'):p.settings()
+    monkeypatch.delenv('AWS_BEARER_TOKEN_BEDROCK')
+    monkeypatch.setenv('AWS_EC2_METADATA_DISABLED', 'true')
+    assert p.status()['credential_mode'] == 'aws_default_chain'
+    iam_client = p.client(p.settings())
+    try: assert iam_client.meta.config.signature_version == 'v4'
+    finally: iam_client.close()
 
 
 def project_with_evidence(tmp_path):

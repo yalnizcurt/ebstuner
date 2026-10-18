@@ -27,9 +27,10 @@ from reconstruction import score_candidate, DEFAULT_WEIGHTS
 from projects import (Repository, Conflict, now, checksum, encode, decode, options, data_of, lines_of, event,
                       check_version, commit_bytes, undo_redo, analyze, reconcile_project, apply_proposals,
                       record_detail, ai_context, accept_ai_result, invalidate_proposals, verify_generation, supplement_diagnostics)
-from bedrock import AIError, CAPABILITIES
-from ai import load_environment, configured_provider
+from bedrock import AIError, CAPABILITIES, AmazonBedrockProvider
+from ai import load_environment, configured_provider, production_mode
 from models import ProjectState, RecordDetail, RecordPage, ProposalPage, DiagnosisView
+from studio import install as install_studio
 
 ROOT = Path(__file__).parent
 load_environment(ROOT / '.env')
@@ -55,13 +56,15 @@ def limit(key, count=6, seconds=60):
 
 @asynccontextmanager
 async def lifespan(app):
-    if os.getenv('STUDIO_ENV') == 'production':
+    if production_mode():
         if len(os.getenv('STUDIO_ACCESS_TOKEN', '')) < 32: raise RuntimeError('Production requires STUDIO_ACCESS_TOKEN with at least 32 characters')
         if not os.getenv('STUDIO_ALLOWED_HOSTS'): raise RuntimeError('Production requires STUDIO_ALLOWED_HOSTS')
         if not os.getenv('STUDIO_PUBLIC_ORIGIN', '').startswith('https://'): raise RuntimeError('Production requires an HTTPS STUDIO_PUBLIC_ORIGIN behind a TLS proxy')
     for name in ('boto3', 'botocore', 'urllib3'): logging.getLogger(name).setLevel(logging.WARNING)
     with repository.connection() as db: repository.cleanup(db)
+    studio_service.start()
     yield
+    studio_service.stop()
 
 
 app = FastAPI(title='CTL–DAT Alignment Studio', version='2.0', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -99,7 +102,7 @@ async def boundaries(request: Request, call_next):
     response.headers.update({'X-Request-ID': correlation, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
                              'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY',
                              'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
-    if os.getenv('STUDIO_ENV') == 'production': response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    if production_mode(): response.headers['Strict-Transport-Security'] = 'max-age=31536000'
     return response
 
 
@@ -121,7 +124,7 @@ def establish(request: Request, response: Response, body: Login):
     existing = request.cookies.get('studio_session')
     if not existing or not repository.session(existing):
         existing = repository.session()
-        response.set_cookie('studio_session', existing, httponly=True, secure=os.getenv('STUDIO_ENV') == 'production', samesite='strict', max_age=7 * 86400, path='/')
+        response.set_cookie('studio_session', existing, httponly=True, secure=production_mode(), samesite='strict', max_age=7 * 86400, path='/')
     return {'authenticated': True, 'draft_export_enabled': os.getenv('STUDIO_ALLOW_DRAFT_EXPORT', '').lower() == 'true'}
 
 @app.get('/api/session')
@@ -131,6 +134,9 @@ def session_status(request: Request):
 
 @app.get('/', response_class=HTMLResponse)
 def home(): return (ROOT / 'index.html').read_text()
+
+@app.get('/advanced', response_class=HTMLResponse)
+def advanced(): return (ROOT / 'advanced.html').read_text()
 
 @app.get('/health')
 def health(): return {'status': 'ok'}
@@ -213,7 +219,7 @@ class SampleImport(Versioned):
 @app.post('/api/projects/{pid}/sample', response_model=ProjectState, response_model_exclude_unset=True)
 def import_sample(pid: str, request: Request, body: SampleImport):
     p = session_or_404(request, pid); check_version(p, body.version)
-    if p['ctl']: raise HTTPException(409, 'Load each sample into a new project; existing source bytes are immutable')
+    if p['ctl'] or p.get('studio'): raise HTTPException(409, 'Load each sample into a new project; existing source bytes are immutable')
     item = find_sample(body.sample_id)
     variant = next((x for x in item['variants'] if x['id'] == body.variant), None)
     if variant is None: raise HTTPException(404, 'Sample variant not found')
@@ -263,7 +269,7 @@ def install_files(p, ctl_bytes, dat_bytes, supplement_name, supplement_bytes, en
 async def upload_files(pid: str, request: Request, ctl: UploadFile = File(...), dat: UploadFile = File(...), supplement: UploadFile | None = File(None),
                        version: int = Form(...), encoding: str = Form('ascii'), record_format: str = Form('auto'), record_length: int | None = Form(None), role: str = Form('reference_values')):
     p = session_or_404(request, pid); check_version(p, version)
-    if p['ctl']: raise HTTPException(409, 'Create a new project to import another source file set; existing source bytes are immutable')
+    if p['ctl'] or p.get('studio'): raise HTTPException(409, 'Create a new project to import another source file set; existing source bytes are immutable')
     c, d = await file_bytes(ctl, 2_000_000), await file_bytes(dat)
     sb = await file_bytes(supplement) if supplement and supplement.filename else b''
     fmt = None if record_format == 'auto' else record_format
@@ -451,3 +457,13 @@ def audit(pid: str, request: Request):
     result = {'project': p['name'], 'version': p['version'], 'original_checksum': checksum(decode(p['original'])), 'current_checksum': checksum(data_of(p)),
               'events': p['history'], 'proposals': p['proposals'], 'ai_runs': p['ai_runs'], 'weights': p['weights']}
     return Response(json.dumps(result, indent=2), media_type='application/json', headers={'Content-Disposition': 'attachment; filename="repair-audit.json"'})
+
+
+def active_provider():
+    p = globals().get('provider')
+    if p is not None and not isinstance(p, AmazonBedrockProvider):
+        return p
+    return configured_provider()
+
+
+studio_service = install_studio(app, lambda: repository, active_provider)
