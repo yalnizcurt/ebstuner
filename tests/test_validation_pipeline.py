@@ -63,3 +63,40 @@ def test_mixed_layout_routing_and_duplicate_field_names_use_stable_ids():
     assert validate_record(pipeline, b'H1')['layout_id'] == 'H'
     assert validate_record(pipeline, b'D2')['layout_id'] == 'D'
     assert not validate_record(pipeline, b'X3')['valid']
+
+
+def master_routed_spec():
+    fields = [field('KIND', 1, 2, mandatory='YES'),
+              field('QUANTITY', 3, 4, kind='INTEGER EXTERNAL', mandatory='YES'),
+              field('CHANNEL', 7, 1, mandatory='YES')]
+    for item in fields:
+        item.update(record_type='layout-one', alignment='EXACT', padding_direction='NONE',
+                    conditional_rules="KIND = 'AB' AND CHANNEL = 'Q'")
+    fields[1].update(padding_alignment='Leading Space Padded (Right Aligned)',
+                     alignment='RIGHT', padding_direction='LEFT', padding_byte='SPACE (0x20)')
+    return approved(fields)
+
+
+def test_compiles_master_routing_conditions_into_executable_layout_checks():
+    spec = master_routed_spec()
+    assert spec['issues'] == []
+    pipeline = compile_pipeline(spec)
+    assert validate_record(pipeline, b'AB  12Q')['valid'] is True
+    unknown = validate_record(pipeline, b'AX  12Q')
+    assert unknown['valid'] is False
+    assert unknown['issues'] == [{'code': 'UNKNOWN_LAYOUT'}]
+    mismatch = validate_record(pipeline, b'AB  X2Q')
+    assert any(item['code'] == 'DATATYPE' for item in mismatch['issues'])
+
+
+@pytest.mark.parametrize('change', ['unsupported_or', 'tampered_when'])
+def test_rejects_uncertified_master_routing_conditions(change):
+    spec = master_routed_spec()
+    if change == 'unsupported_or':
+        for item in spec['fields']:
+            item['conditional_rules'] = "KIND = 'AB' OR CHANNEL = 'Q'"
+    else:
+        spec['layouts'][0]['when'][0]['equals'] = 'ZZ'
+    with pytest.raises(SpecError) as exc:
+        compile_pipeline(spec)
+    assert 'UNSUPPORTED_CONDITION' in {item['code'] for item in exc.value.issues}

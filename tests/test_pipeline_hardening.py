@@ -90,7 +90,7 @@ def test_unsupported_rules_explicitly_detected():
     raw_spec2['fields'][1]['conditional_rules'] = 'WHEN RECORD_TYPE=01 THEN REQUIRED'
     with pytest.raises(SpecError) as exc:
         compile_pipeline(raw_spec2)
-    assert any(iss['code'] == 'UNSUPPORTED_RULE' for iss in exc.value.issues)
+    assert any(iss['code'] == 'UNSUPPORTED_CONDITION' for iss in exc.value.issues)
 
 
 def test_validate_correct_dat_and_damaged_dat_variants():

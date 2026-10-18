@@ -1,6 +1,7 @@
 """Real HTTP workflow with explicit synthetic AI; never consumes provider quota."""
 import copy
 import csv
+import hashlib
 import io
 import time
 
@@ -188,6 +189,49 @@ def test_unfamiliar_headers_are_mapped_by_ai_without_losing_source_columns(clien
     assert len(state['spec']['fields']) == 3
     assert [c[0] for c in web.provider.calls] == ['studio_headers', 'studio_spec']
     assert state['spec']['fields'][0]['source']['cells']['field_name']['value'] == 'CUSTOMER'
+
+
+def test_ai_spec_proposals_cannot_overwrite_supported_source_rules(client, monkeypatch):
+    """A conflicting model reading is visible advice, not an executable rule change."""
+    pid, state = upload(client, GOOD)
+    original_digest = hashlib.sha256(client.get(f'/api/projects/{pid}/studio/download?original=true').content).hexdigest()
+    baseline = {field['id']: copy.deepcopy(field['rules']) for field in state['spec']['fields']}
+    invoke = web.provider.invoke_structured
+
+    def conflicting(capability, context, response_model, instructions, scope):
+        run = invoke(capability, context, response_model, instructions, scope)
+        if capability == 'studio_spec':
+            for group, interpretation in zip(context['groups'], run['result']['interpretations']):
+                if group['datatype_conversion'] == 'CHAR':
+                    interpretation.update(conversion='rtrim', padding_side='none', padding_char='')
+            response_model.model_validate(run['result'])
+        return run
+
+    monkeypatch.setattr(web.provider, 'invoke_structured', conflicting)
+    assert call(client, pid, state, '/analyze-spec').status_code == 200
+    state = finish(client, pid, 'spec')
+    assert state['spec']['ai_complete']
+    assert all(field['rules'] == baseline[field['id']] for field in state['spec']['fields'])
+    customer = next(field for field in state['spec']['fields'] if field['field_name'] == 'CUSTOMER')
+    assert customer['ai_interpretation']['conversion'] == 'rtrim'
+    assert customer['ai_interpretation']['padding_side'] == 'none'
+    assert customer['ai_interpretation']['padding_char'] == ''
+    assert not {issue['code'] for issue in state['spec']['issues']} & {'SOURCE_DATATYPE', 'PADDING'}
+
+    fields = copy.deepcopy(state['spec']['fields'])
+    for field in fields:
+        field['mandatory'] = 'YES'
+    revised = client.put(f'/api/projects/{pid}/studio/spec', headers=H,
+        json={'version': state['project']['version'], 'fields': fields,
+              'options': state['spec']['options'], 'layouts': state['spec']['layouts']})
+    assert revised.status_code == 200, revised.text
+    state = revised.json()
+    assert not state['spec']['issues']
+    approved_response = call(client, pid, state, '/approve')
+    assert approved_response.status_code == 200, approved_response.text
+    assert approved_response.json()['spec']['approved']
+    final_original = client.get(f'/api/projects/{pid}/studio/download?original=true').content
+    assert hashlib.sha256(final_original).hexdigest() == original_digest
 
 
 def test_oversized_atomic_edits_ownership_and_immutable_sources(client):

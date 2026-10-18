@@ -51,9 +51,6 @@ def compile_pipeline(spec: dict) -> ValidationPipeline:
         if extra:
             errors.append({'code': 'UNSUPPORTED_RULE', 'field_id': field['id'],
                            'message': 'Unsupported rule keys: ' + ', '.join(sorted(extra)), 'severity': 'error'})
-        if str(field.get('conditional_rules', '')).strip():
-            errors.append({'code': 'UNSUPPORTED_RULE', 'field_id': field['id'],
-                           'message': 'Conditional rules need an approved executable definition', 'severity': 'error'})
     if errors:
         raise SpecError('Specification has unresolved or unsupported validation rules', errors)
     by_id = {field['id']: field for field in spec['fields']}

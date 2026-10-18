@@ -68,7 +68,7 @@ class DATAnalysis(Strict):
 
 SPEC_INSTRUCTIONS = (
     'Interpret specification field groups for a consultant. Return exactly one interpretation for every supplied group_id. '
-    'The ten source columns are authoritative; sample and cleansed values are examples, not required values. '
+    'The declared master specification columns are authoritative; sample and cleansed values are examples, not required values. '
     'Do not rewrite source values, infer missing business values, or invent rules. datatype char permits digits and letters. '
     'padding_side names the side where padding bytes are added, not the side to which text is aligned. '
     'Use unknown/unsupported and questions when a rule is unclear. Preserve internal spaces when permitted. '
@@ -386,18 +386,8 @@ class StudioService:
                 rule = interpretations[group['group_id']]
                 for ident in group['field_ids']:
                     f = by_id[ident]
-                    r = f.setdefault('rules', {})
-                    if r.get('mapping_type') in ('physical', 'filler', None):
-                        if rule['datatype'] != 'unknown':
-                            r['datatype'] = rule['datatype']
-                        if rule['conversion'] != 'unsupported':
-                            r['conversion'] = rule['conversion']
-                        if rule['date_format']:
-                            r['date_format'] = rule['date_format']
-                        if rule['padding_side'] != 'unknown':
-                            r['padding'] = {'side': rule['padding_side'], 'char': rule['padding_char']}
-                        r['allow_internal_spaces'] = rule['allow_internal_spaces']
-                        # Missing source mandatory metadata stays UNKNOWN until a user decides.
+                    # AI proposals require a source declaration revision before they can become executable rules.
+                    f['ai_interpretation'] = copy.deepcopy(rule)
                     f['ai_explanation'] = rule['explanation'][:2000]
                     for question in rule['questions']:
                         questions.append({'field_id': ident, 'message': question[:1000], 'severity': 'error', 'source': 'AI'})
