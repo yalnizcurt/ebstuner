@@ -32,6 +32,7 @@ const columns = [
 let state = null;
 let projectId = null;
 let stage = 'upload';
+let batchStep = 'upload';
 let draftFields = [];
 let draftOptions = {};
 let draftLayouts = [];
@@ -146,7 +147,8 @@ async function openProject(id) {
   const next = await request(`/api/projects/${encodeURIComponent(id)}/studio`);
   applyState(next);
   await loadBatch();
-  setStage(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length ? 'batch' : state.spec?.approved ? 'dat' : state.document ? 'spec' : 'upload');
+  batchStep = batchState?.batch?.summary?.records ? 'resolve' : batchState?.batch?.specs?.length || batchState?.batch?.dats?.length ? 'resolve' : 'upload';
+  setStage(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length ? 'batch' : state.spec?.approved ? 'dat' : state.document ? 'spec' : 'batch');
   if(state.stage==='legacy')notify(state.notice||'This saved project uses the Advanced CTL workstation. Open it from the navigation link.');
   await listProjects();
 }
@@ -159,6 +161,15 @@ function setStage(next) {
   render();
   window.scrollTo({top:0, behavior:'smooth'});
 }
+function setBatchStep(next) {
+  if (next !== 'upload' && !(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length)) {
+    notify('Upload a specification or DAT file to continue.', true); return;
+  }
+  batchStep = next;
+  stage = 'batch';
+  render();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
 function issueText(issue) { return typeof issue === 'string' ? issue : issue.message || issue.reason || issue.code || 'Review this item.'; }
 function fieldIssues(field) {
   return (state?.spec?.issues || []).filter(issue => typeof issue !== 'string' && (issue.field_id === field.id || issue.field === field.id || issue.field === field.field_name));
@@ -170,7 +181,7 @@ function currentValue(field) {
 }
 function render() {
   $('#projectTitle').textContent = state?.project?.name || 'Prepare a DAT file for import';
-  $('#pageSubtitle').textContent = stage === 'batch' ? 'Review files, approve rules, and inspect each record before export.' : stage === 'upload' ? 'Review your specification and correct values without counting spaces.' : stage === 'spec' ? 'Your approved specification controls how the file is formatted and checked.' : 'Review actual values beside the approved specification. Padding is handled for you.';
+  $('#pageSubtitle').textContent = stage === 'batch' ? 'Upload, resolve exceptions, and download a validated DAT.' : stage === 'upload' ? 'Review your specification and correct values without counting spaces.' : stage === 'spec' ? 'Your approved specification controls how the file is formatted and checked.' : 'Review actual values beside the approved specification. Padding is handled for you.';
   $('#saveStatus').textContent = specDirty || valueEdits.size ? 'Unsaved changes' : state ? `Saved · version ${state.project.version}` : 'No project selected';
   $('#saveStatus').className = `status-tag ${specDirty || valueEdits.size ? 'dirty' : state ? 'saved' : ''}`;
   $$('[data-stage]').forEach(button => {
@@ -180,6 +191,14 @@ function render() {
     button.classList.toggle('complete', target === 'upload' && !!state?.document || target === 'spec' && !!state?.spec?.approved);
     button.disabled = busy || target !== 'upload' && target !== 'batch' && !state?.document || target === 'dat' && (!state?.spec?.approved || specDirty);
     if (button.classList.contains('stage-step')) button.setAttribute('aria-current', target === stage ? 'step' : 'false');
+  });
+  $$('[data-batch-step]').forEach(button => {
+    const target = button.dataset.batchStep;
+    button.classList.toggle('active', stage === 'batch' && target === batchStep);
+    button.classList.toggle('current', stage === 'batch' && target === batchStep);
+    button.classList.toggle('complete', stage === 'batch' && (target === 'upload' && batchStep !== 'upload' || target === 'resolve' && batchStep === 'download'));
+    button.disabled = busy || target !== 'upload' && !(batchState?.batch?.specs?.length || batchState?.batch?.dats?.length);
+    if (button.classList.contains('stage-step')) button.setAttribute('aria-current', stage === 'batch' && target === batchStep ? 'step' : 'false');
   });
   $('#uploadStage').classList.toggle('hidden', stage !== 'upload');
   $('#reviewStage').classList.toggle('hidden', stage === 'upload' || stage === 'batch');
@@ -197,6 +216,9 @@ function acceptBatch(next) {
   if (!specs.some(spec => spec.id === batchSpecId)) { batchSpecId = specs[0]?.id || null; batchSpecDraft = null; batchSpecDirty = false; batchSpecEditing = false; }
   const dats = next.batch?.dats || [];
   if (!dats.some(dat => dat.id === batchDatId)) { batchDatId = dats[0]?.id || null; batchRecords = []; batchRecord = null; batchRecordDetail = null; batchOffset = 0; batchTotal = 0; }
+  if ((specs.length || dats.length) && batchStep === 'upload') {
+    batchStep = 'resolve';
+  }
   render();
 }
 async function loadBatch() {
@@ -211,8 +233,53 @@ async function batchAction(path, payload = {}, method = 'POST') {
   return next;
 }
 function chosenBatchSpec() { return (batchState?.batch?.specs || []).find(spec => spec.id === batchSpecId); }
+function renderBatchBlockers(batch) {
+  const container = $('#batchBlockers');
+  if (!container) return;
+  const items = [];
+  const specs = batch?.specs || [];
+  const dats = batch?.dats || [];
+  const summary = batch?.summary || {};
+  const unapproved = specs.filter(s => !s.approved);
+  if (unapproved.length) {
+    items.push({
+      tone: 'warn',
+      title: 'Specifications need approval',
+      message: `${unapproved.length} specification(s) pending approval: ${unapproved.map(s => s.name).join(', ')}`
+    });
+  }
+  const unassociated = dats.filter(d => !(batch.associations || []).some(a => a.dat_id === d.id));
+  if (unassociated.length) {
+    items.push({
+      tone: 'warn',
+      title: 'Layout associations required',
+      message: `${unassociated.length} DAT file(s) have no associated layout: ${unassociated.map(d => d.name).join(', ')}`
+    });
+  }
+  const blockedFiles = summary.blocked_files || [];
+  if (blockedFiles.length) {
+    items.push({
+      tone: 'error',
+      title: 'Files blocked from export',
+      message: blockedFiles.map(b => `${dats.find(d => d.id === b.dat_id)?.name || b.dat_id}: ${b.reason}`).join(' · ')
+    });
+  }
+  if (!items.length) {
+    container.innerHTML = '<div class="review-status approved"><strong>All specifications approved and layouts assigned.</strong></div>';
+    return;
+  }
+  container.innerHTML = `<div class="review-status"><strong>Action required to resolve exceptions</strong>${items.map(item => `<p class="issue-text"><strong>${esc(item.title)}:</strong> ${esc(item.message)}</p>`).join('')}</div>`;
+}
 function renderBatch() {
   const batch = batchState?.batch;
+  $('#batchUploadForm').classList.toggle('hidden', batchStep !== 'upload');
+  $('#batchStepTitle').textContent = {upload:'Upload files',resolve:'Resolve exceptions',download:'Download aligned DAT'}[batchStep];
+  $('#batchStepDescription').textContent = {upload:'Add one or more specifications and DAT files. The original bytes are preserved.',resolve:'Review the approved rules and address each blocking cause.',download:'Download only DAT files that pass the approved specification.'}[batchStep];
+  $('#batchResolveWorkspace').classList.toggle('hidden', batchStep !== 'resolve');
+  $('#batchRecordWorkspace').classList.toggle('hidden', batchStep !== 'resolve');
+  $('#batchDownloadWorkspace').classList.toggle('hidden', batchStep !== 'download');
+  $('#batchBlockers').classList.toggle('hidden', batchStep !== 'resolve');
+  $('#batchSummary').classList.toggle('hidden', batchStep === 'upload');
   $('#batchWorkspace').classList.toggle('hidden', !batch || !(batch.specs?.length || batch.dats?.length));
   $('#batchUploadButton').disabled = !!state?.document || busy;
   $('#batchProjectName').value = state?.project?.name || $('#batchProjectName').value;
@@ -220,6 +287,7 @@ function renderBatch() {
   if (!batch) return;
   const specs = batch.specs || [], dats = batch.dats || [], associations = batch.associations || [];
   const summary = batch.summary || {};
+  renderBatchBlockers(batch);
   $('#batchSummary').innerHTML = [[specs.length,'Specifications',''],[dats.length,'DAT files',''],[summary.records ?? summary.record_count ?? '—','Records',''],[summary.unvalidated ?? summary.blocked ?? '—','Unvalidated','warning']].map(([value,label,tone]) => `<div class="summary-card ${tone}"><strong>${esc(value)}</strong><small>${esc(label)}</small></div>`).join('');
   $('#batchSpecList').innerHTML = specs.map(spec => `<div class="batch-file-row"><button class="batch-file ${spec.id===batchSpecId?'selected':''}" type="button" data-batch-spec="${esc(spec.id)}"><strong>${esc(spec.name)}</strong><span class="pill ${spec.approved?'good':'warn'}">${spec.approved?'Approved':'Needs approval'}</span><small>Version ${esc(spec.version)} · ${(spec.fields||[]).length} fields · ${(spec.layouts||[]).length} layouts · ${esc(spec.ai_status||'AI not run')}</small></button><button class="secondary compact" type="button" data-batch-spec-source="${esc(spec.id)}">Original</button></div>`).join('') || '<p class="annotation">Upload a CSV or Excel specification.</p>';
   $('#batchSpecSelect').innerHTML = specs.map(spec => `<option value="${esc(spec.id)}"${spec.id===batchSpecId?' selected':''}>${esc(spec.name)} · v${esc(spec.version)}</option>`).join('');
@@ -242,9 +310,12 @@ function renderBatch() {
   $('#batchSaveAssociations').disabled = !dats.length || busy;
   $('#batchProcess').disabled = !dats.length || busy;
   $('#batchAi').disabled = !summary.records || busy;
-  $('#batchGenerate').disabled = !dats.some(dat=>dat.summary?.unvalidated_count===0&&dat.summary?.ai_status==='reviewed') || busy;
+  $('#batchGenerate').disabled = !dats.some(dat=>dat.summary?.unvalidated_count===0) || busy;
   $('#batchDownloadArchive').disabled = !dats.some(dat=>dat.export_eligible) || busy;
   $('#batchExportNote').textContent = `${dats.filter(dat=>dat.export_eligible).length} of ${dats.length} DAT files are eligible for export. The archive includes only eligible files and a manifest naming blocked files.${(summary.blocked_files||[]).length?' Blocked: '+summary.blocked_files.map(item=>`${dats.find(dat=>dat.id===item.dat_id)?.name||item.dat_id}: ${item.reason}`).join(' · '):''}`;
+  $('#batchDownloadSummary').textContent = `${dats.filter(dat=>dat.export_eligible).length} of ${dats.length} files validated. ${specs.filter(spec=>spec.approved).map(spec=>`${spec.name} v${spec.version}`).join(' · ') || 'Approve a specification to continue.'}`;
+  $('#batchDownloadList').innerHTML = dats.map(dat=>`<div class="batch-file-row"><strong>${esc(dat.name)}</strong><span class="pill ${dat.export_eligible?'good':'warn'}">${dat.export_eligible?'Ready':'Blocked'}</span><button class="secondary compact" type="button" data-batch-file-download="${esc(dat.id)}" ${dat.export_eligible?'':'disabled'}>Download</button></div>`).join('');
+  $('#batchDownloadPrimary').disabled = !dats.some(dat=>dat.export_eligible) || busy;
   renderBatchRecords();
 }
 function renderBatchRecords() {
@@ -560,11 +631,12 @@ function applyRuleEdits() {
 }
 
 $$('[data-stage]').forEach(button => button.addEventListener('click', () => setStage(button.dataset.stage)));
+$$('[data-batch-step]').forEach(button => button.addEventListener('click', () => setBatchStep(button.dataset.batchStep)));
 $('#dismissNotice').onclick = () => $('#notice').classList.add('hidden');
 $('#loginForm').onsubmit = event => { event.preventDefault(); withBusy(event.submitter,'Signing in…',async () => { await request('/api/session',{method:'POST',body:JSON.stringify({access_token:$('#accessToken').value})}); $('#accessToken').value=''; await initialize(); }); };
 $('#newProjectButton').onclick = async () => {
   if ((specDirty || valueEdits.size || batchSpecDirty) && !await confirmAction('Leave unsaved changes and start a new project?')) return;
-  clearTimeout(pollTimer); state=null; projectId=null; draftFields=[]; draftOptions={}; draftLayouts=[]; specDirty=false; valueEdits.clear(); batchState=null; batchSpecId=null; batchSpecDraft=null; batchSpecDirty=false; batchSpecEditing=false; batchDatId=null; batchRecords=[]; batchRecord=null; batchRecordDetail=null; batchOffset=0; batchTotal=0; batchFieldId=null; stage='upload';
+  clearTimeout(pollTimer); state=null; projectId=null; draftFields=[]; draftOptions={}; draftLayouts=[]; specDirty=false; valueEdits.clear(); batchState=null; batchSpecId=null; batchSpecDraft=null; batchSpecDirty=false; batchSpecEditing=false; batchDatId=null; batchRecords=[]; batchRecord=null; batchRecordDetail=null; batchOffset=0; batchTotal=0; batchFieldId=null; stage='upload'; batchStep='upload';
   $('#projectName').value=''; $('#uploadForm').reset(); $('#batchProjectName').value=''; $('#batchUploadForm').reset(); render(); await listProjects(); $('#projectName').focus();
 };
 $('#refreshProject').onclick = () => withBusy($('#refreshProject'),'Refreshing…',async () => {
@@ -609,6 +681,7 @@ $('#batchAi').onclick = () => withBusy($('#batchAi'),'Auditing…',async () => {
 $('#batchGenerate').onclick = () => withBusy($('#batchGenerate'),'Validating…',async () => {await batchAction('/generate');notify('Export eligibility recalculated. Download only files marked eligible.');});
 async function batchDownload(path) {const response=await fetch(batchPath(path),{headers:{'X-Studio-Request':'1'}});if(!response.ok){const body=await response.json().catch(()=>null);throw Error(errorMessage(body?.detail||body));}const blob=await response.blob();const name=response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/)?.[1]||'batch-export';const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
 $('#batchDownloadArchive').onclick = () => withBusy($('#batchDownloadArchive'),'Preparing archive…',()=>batchDownload('/archive'));
+$('#batchDownloadPrimary').onclick = () => withBusy($('#batchDownloadPrimary'),'Preparing download…',()=>batchDownload('/archive'));
 $('#closeBatchRules').onclick=$('#cancelBatchRules').onclick=()=>$('#batchRuleDialog').close();
 $('#saveBatchRules').onclick=saveBatchRules;
 $('#batchPreviousRecords').onclick = () => withBusy($('#batchPreviousRecords'),'Loading…',async()=>{batchOffset=Math.max(0,batchOffset-100);await loadBatchRecords();});
@@ -660,7 +733,7 @@ document.addEventListener('click', event => {
   if(batchButton?.dataset.batchDat){batchDatId=batchButton.dataset.batchDat;batchRecords=[];batchRecord=null;batchRecordDetail=null;batchOffset=0;batchTotal=0;renderBatch();withBusy(null,'',loadBatchRecords);return;}
   if(batchButton?.dataset.batchRecord!==undefined){withBusy(batchButton,'Loading…',()=>selectBatchRecord(Number(batchButton.dataset.batchRecord)));return;}
   if(batchButton?.dataset.batchFieldEvidence){batchFieldId=batchButton.dataset.batchFieldEvidence;renderBatchRecords();return;}
-  if(batchButton?.dataset.batchDownload){withBusy(batchButton,'Downloading…',()=>batchDownload(`/download/${encodeURIComponent(batchButton.dataset.batchDownload)}`));return;}
+  if(batchButton?.dataset.batchDownload || batchButton?.dataset.batchFileDownload){withBusy(batchButton,'Downloading…',()=>batchDownload(`/download/${encodeURIComponent(batchButton.dataset.batchDownload || batchButton.dataset.batchFileDownload)}`));return;}
   if(batchButton?.dataset.batchOriginal){withBusy(batchButton,'Downloading…',()=>batchDownload(`/download/${encodeURIComponent(batchButton.dataset.batchOriginal)}?original=true`));return;}
   if(batchButton?.dataset.batchSpecSource){withBusy(batchButton,'Downloading…',()=>batchDownload(`/specs/${encodeURIComponent(batchButton.dataset.batchSpecSource)}/source`));return;}
   if(batchButton?.id==='batchSaveAiDecision'){withBusy(batchButton,'Saving…',async()=>{const record=batchRecordDetail,reason=$('#batchAiReason')?.value.trim();if(!record||!reason||reason.length<3)throw Error('Explain the AI review decision in at least three characters.');const evidence=record.ai_review?.evidence_id||record.evidence_id;if(!evidence)throw Error('AI evidence identifier is unavailable; rerun the audit.');await batchAction(`/records/${encodeURIComponent(batchDatId)}/${record.number}/ai-decision`,{evidence_id:evidence,decision:$('#batchAiDecision').value,reason});await selectBatchRecord(batchRecord);notify('AI review decision saved. Export still depends on deterministic validation.');});return;}

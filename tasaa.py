@@ -23,6 +23,7 @@ CERTIFIED_SAFE_REPAIR = 'CERTIFIED_SAFE_REPAIR'
 HUMAN_REVIEW_REQUIRED = 'HUMAN_REVIEW_REQUIRED'
 SPEC_CONFLICT = 'SPEC_CONFLICT'
 UNRECOVERABLE = 'UNRECOVERABLE'
+HUMAN_REVIEWED_MAPPING = 'HUMAN_REVIEWED_MAPPING'
 
 
 @dataclass(frozen=True)
@@ -661,6 +662,95 @@ def _base(row: bytes, signatures: list[dict], initial: list[dict], anchors: list
         'resource_limit_reached': False,
         'timings': {key: 0.0 for key in ('initial', 'anchor', 'candidate', 'search', 'certification', 'reconstruction')},
     }
+
+
+def resolve_mapping(spec: dict, layout: dict, row: bytes, mapping: list[dict], *, encoding: str | None = None) -> dict:
+    """Validate explicitly reviewed source ranges; offsets are zero-based and end-exclusive.
+
+    The caller binds the review to the original bytes and approved spec version.
+    Source ranges authorize ownership, never replacement values or unchecked padding removal.
+    """
+    from specs import normalize_spec
+    from validation_pipeline import compile_pipeline, validate_record
+
+    if not isinstance(row, bytes) or not isinstance(mapping, list):
+        raise ValueError('Supply original record bytes and reviewed source ranges.')
+    approved = normalize_spec(spec)
+    pipeline = compile_pipeline(approved)
+    selected = next((item for item in approved['layouts'] if item['id'] == layout.get('id')), None)
+    if selected is None:
+        raise ValueError('Select a layout from the approved specification.')
+    encoding = encoding or pipeline.encoding
+    row.decode(encoding, 'strict')
+    by_id = {field['id']: field for field in approved['fields']}
+    fields = sorted((by_id[key] for key in selected['field_ids'] if by_id[key]['rules'].get('start') is not None),
+                    key=lambda field: field['rules']['start'])
+    if len(mapping) != len(fields):
+        raise ValueError('Assign a source range to every physical field exactly once.')
+
+    entries, outputs = [], []
+    source_cursor = target_cursor = 0
+    for field, proposed in zip(fields, mapping):
+        rule = field['rules']
+        if (not isinstance(proposed, dict) or set(proposed) != {'field_id', 'source_start', 'source_end'}
+                or proposed.get('field_id') != field['id']):
+            raise ValueError('Review each physical field in specification order using its unique field ID.')
+        start, end = proposed['source_start'], proposed['source_end']
+        if (type(start) is not int or type(end) is not int or start != source_cursor
+                or end < start or end > len(row)):
+            raise ValueError('Source ranges must cover the original record in order without gaps or overlaps.')
+        if rule['start'] - 1 != target_cursor:
+            raise ValueError('Approve explicit ownership for target gaps or overlapping fields before mapping.')
+        interpretations = []
+        for output, values, padding, unresolved, left_insert, evidence in _interpret(
+                field, row[start:end], start, encoding, selected.get('when')):
+            checks = _checks(field, output, encoding)
+            if any(check['passed'] is not True for check in checks):
+                continue
+            # Reviewed ownership retains ambiguous spaces as data; it never permits their removal.
+            entry = {
+                'field_id': field['id'], 'source_start': start, 'source_end': end,
+                'target_start': target_cursor, 'target_end': rule['end'],
+                'value_offsets': tuple(sorted((*values, *unresolved))), 'padding_offsets': padding,
+                'unresolved_offsets': (), 'left_insert': left_insert,
+                'padding_byte': rule['padding']['char'].encode(encoding)[0],
+                'inserted_padding': max(0, len(output) - (end - start)),
+                'checks': checks, 'hard_valid': True,
+                'padding_evidence': [*evidence, 'Source field range explicitly reviewed; ambiguous source bytes retained'],
+            }
+            if (output, entry) not in interpretations:
+                interpretations.append((output, entry))
+        if len(interpretations) != 1:
+            raise ValueError(f'Field {field["id"]}: the reviewed range does not determine one valid, byte-preserving value. '
+                             'Check its boundaries and approved padding/type rules.')
+        output, entry = interpretations[0]
+        outputs.append(output)
+        entries.append(entry)
+        source_cursor, target_cursor = end, rule['end']
+    if source_cursor != len(row):
+        raise ValueError('Every original byte needs a reviewed field owner; trailing bytes cannot be discarded.')
+    if target_cursor != selected['record_length']:
+        raise ValueError('Approve explicit field or filler ownership for the complete output record.')
+    candidate = b''.join(outputs)
+    provenance = verify_preservation(row, candidate, entries)
+    if provenance is None:
+        raise ValueError('The reviewed mapping would lose or change original value bytes.')
+    validation = validate_record(pipeline, candidate, selected['id'])
+    if not validation['valid']:
+        codes = sorted({check['code'] for check in validation['issues']})
+        raise ValueError('The reconstructed record fails approved validation: ' + ', '.join(codes))
+    reason = 'Explicitly reviewed field boundaries; original value bytes preserved and exact output validated'
+    result = _base(row, [_signature(field, index) for index, field in enumerate(fields, 1)], [], [],
+                   status='reviewed', reason=reason, classification=HUMAN_REVIEWED_MAPPING,
+                   structural_status='STRUCTURALLY_REPAIRABLE' if candidate != row else 'POSITIONALLY_COMPLIANT')
+    result.update(candidate=candidate, validation_status='PASSED', ledger=provenance['source'], provenance=provenance,
+                  alternatives=[{'candidate': candidate, 'mapping': entries, 'provenance': provenance, 'score': 0}],
+                  candidates=[{'id': 'reviewed', 'fields': [
+                      {'id': entry['field_id'], 'source_start': entry['source_start'], 'source_end': entry['source_end'],
+                       'hard_valid': True} for entry in entries], 'certified': False}],
+                  certification={'level': HUMAN_REVIEWED_MAPPING, 'classification': HUMAN_REVIEWED_MAPPING,
+                                 'reason': reason, 'semantic_proof': False, 'formal_mapping_count': None})
+    return result
 
 
 def analyze(spec: dict, layout: dict, row: bytes, *, beam_width: int = 64, max_shift: int = 4, encoding: str = 'ascii', options: AlignmentOptions | None = None) -> dict:

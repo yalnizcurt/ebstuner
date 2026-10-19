@@ -1,0 +1,4 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+TRANS_ID,1,6,6,CHAR,Fixed Text (Exact Width),POSITION,YES
+RAW_DATE,7,14,8,DATE,Fixed Text (Exact Width),POSITION,YES
+REMARK,15,25,11,CHAR,Trailing Space Padded,POSITION,YES

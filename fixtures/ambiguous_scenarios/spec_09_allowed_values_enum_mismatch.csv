@@ -1,0 +1,7 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory,Allowed Values
+TXN_TYPE,1,3,3,CHAR,Fixed Text (Exact Width),POSITION,YES,"CRD
+DBT
+REV"
+AMOUNT,4,13,10,NUMBER,Leading zeroes,POSITION,YES,
+STATUS_CODE,14,14,1,CHAR,Fixed Text (Exact Width),POSITION,YES,"Y
+N"

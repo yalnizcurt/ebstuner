@@ -5,6 +5,7 @@ import copy
 import csv
 import hashlib
 import io
+import json
 import re
 import zipfile
 from datetime import datetime
@@ -216,7 +217,12 @@ def _type_rule(text):
         return {'datatype': 'decimal', 'conversion': 'to_number'}
     if re.fullmatch(r'(?:CHAR|VARCHAR2?|TEXT|STRING)(?:\s*\(\d+\))?', upper): return {'datatype': 'char', 'conversion': 'identity'}
     if re.fullmatch(r'(?:INTEGER|INT)\s+EXTERNAL(?:\s*\(\d+\))?', upper): return {'datatype': 'integer', 'conversion': 'to_number'}
-    if re.fullmatch(r'(?:DECIMAL\s+EXTERNAL|NUMBER|NUMERIC)(?:\s*\(\d+(?:\s*,\s*\d+)?\))?', upper): return {'datatype': 'decimal', 'conversion': 'to_number'}
+    number = re.fullmatch(r'(?:NUMBER|NUMERIC)(?:\s*\(\s*(\d+)\s*(?:,\s*([+-]?\d+)\s*)?\))?', upper)
+    if number:
+        rule = {'datatype': 'decimal', 'conversion': 'to_number'}
+        if number.group(1): rule.update(precision=int(number.group(1)), scale=int(number.group(2) or 0))
+        return rule
+    if re.fullmatch(r'DECIMAL\s+EXTERNAL(?:\s*\(\d+\))?', upper): return {'datatype': 'decimal', 'conversion': 'to_number'}
     if re.fullmatch(r'FLOAT\s+EXTERNAL(?:\s*\(\d+\))?', upper): return {'datatype': 'float', 'conversion': 'to_number'}
     date = re.fullmatch(r'DATE(?:\s*\(\d+\))?\s+[\'"]([^\'"]+)[\'"]', value, re.I)
     if date: return {'datatype': 'date', 'conversion': 'to_date', 'date_format': date.group(1).upper()}
@@ -303,6 +309,46 @@ def infer_layouts(document, fields=None):
                         'record_length': max((f.get('rules', {}).get('end') or 0 for f in selected), default=0),
                         'when': when, 'source_conditions': [{'text': text, 'references': refs} for text, refs in expressions]})
     return {'layouts': layouts, 'issues': findings}
+
+
+def import_document(document, options=None):
+    """Keep source conditions and uncompiled source text visible at approval."""
+    fields = copy.deepcopy(document.get('fields', []))
+    inferred = infer_layouts(document, fields)
+    explicit = any(layout.get('source_conditions') for layout in inferred['layouts'])
+    layouts = inferred['layouts'] if explicit else []
+    if explicit:
+        for layout in layouts:
+            identifiers = {field['record_type'].strip() for field in fields
+                           if field['id'] in layout['field_ids'] and field.get('record_type', '').strip()}
+            if len(identifiers) == 1: layout['id'] = next(iter(identifiers))
+    requirements = []
+    for section in document.get('sections', []):
+        for row in section.get('metadata', []):
+            text = ' '.join(str(value) for value in row.get('values', []) if str(value).strip()).strip()
+            if not text or re.match(r'(?:CTL\s+)?(?:ROUTING\s+CONDITION|RECORD\s+CONDITION|WHEN)\s*:', text, re.I): continue
+            reference = ', '.join(row.get('references', []))
+            requirements.append({'id': f"metadata:{section['id']}:{row['row']}", 'reference': reference,
+                                 'text': text, 'status': 'unresolved'})
+    for field in fields:
+        for column, value in field.get('source', {}).get('extra_columns', {}).items():
+            if str(value).strip():
+                requirements.append({'id': f"extra:{field['id']}:{column}",
+                                     'reference': f"{field['source'].get('sheet', '')}!{field['source'].get('row', '')}:{column}",
+                                     'text': f'{column}: {value}', 'status': 'unresolved'})
+    return normalize_spec({'fields': fields, 'layouts': layouts, 'options': options or {},
+                           'source_issues': [*document.get('issues', []), *inferred['issues']],
+                           'source_requirements': requirements, 'file_rules': []})
+
+
+def spec_fingerprint(spec):
+    """Bind human decisions to executable rules, independent of UI review state."""
+    normalized = normalize_spec(spec)
+    options = {key: value for key, value in normalized['options'].items()
+               if key not in ('confirmed_records', 'suspect_records', 'mapping_resolutions', 'detail_record', 'record_number')}
+    contract = {'fields': [{'id': field['id'], 'rules': field['rules']} for field in normalized['fields']],
+                'layouts': normalized['layouts'], 'options': options, 'file_rules': normalized.get('file_rules', [])}
+    return hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
 
 
 def _layouts(spec):

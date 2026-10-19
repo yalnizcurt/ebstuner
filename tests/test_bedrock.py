@@ -21,7 +21,7 @@ class Client:
 
 @pytest.fixture
 def env(monkeypatch):
-    for key in ['BEDROCK_TOKEN_FILE','STUDIO_ENV','BEDROCK_ENABLED','BEDROCK_STRUCTURED_MODE','BEDROCK_INPUT_USD_PER_MILLION','BEDROCK_OUTPUT_USD_PER_MILLION']:
+    for key in ['BEDROCK_TOKEN_FILE','STUDIO_ENV','APP_ENV','BEDROCK_ENABLED','BEDROCK_STRUCTURED_MODE','BEDROCK_INPUT_USD_PER_MILLION','BEDROCK_OUTPUT_USD_PER_MILLION']:
         monkeypatch.delenv(key,raising=False)
     monkeypatch.setenv('AWS_BEARER_TOKEN_BEDROCK','synthetic-test-token')
     monkeypatch.setenv('AWS_REGION','us-east-1')

@@ -128,6 +128,10 @@ def runtime_options(studio):
 
 
 def fingerprint(p, kind):
+    if kind == 'batch':
+        batch = p.get('batch', {})
+        return digest({'specs': batch.get('specs'), 'dats': batch.get('dats'),
+                       'associations': batch.get('associations')})
     s = p['studio']
     if kind == 'spec':
         return digest({'document': s['document']['sha256'], 'fields': s['spec']['fields'],
@@ -245,14 +249,17 @@ class StudioService:
     def process(self, job):
         try:
             p = self.repository().load(job['owner'], job['project'])
-            if not p.get('studio') or fingerprint(p, job['kind']) != job['fingerprint']:
+            if not p.get('batch' if job['kind'] == 'batch' else 'studio') or fingerprint(p, job['kind']) != job['fingerprint']:
                 job['payload']['message'] = 'Files or spec changed; this analysis was superseded'
                 self.update_job(job, 'superseded')
                 return
             provider = self.provider()
             if not hasattr(provider, 'invoke_structured'):
-                raise AIError('PROVIDER', 'This workflow requires Amazon Bedrock structured spec analysis.')
-            if job['kind'] == 'spec':
+                raise AIError('PROVIDER', 'Configure a structured AI provider to review uncertain mappings.')
+            if job['kind'] == 'batch':
+                from batch_studio import review_batch
+                review_batch(self, job, p, provider)
+            elif job['kind'] == 'spec':
                 self.analyze_spec(job, p, provider)
             else:
                 self.analyze_dat(job, p, provider)
@@ -533,6 +540,7 @@ class SaveSpec(Version):
     fields: list[dict] = Field(min_length=1, max_length=4000)
     options: dict = Field(default_factory=dict)
     layouts: list[dict] = Field(default_factory=list, max_length=100)
+    file_rules: list[dict] = Field(default_factory=list, max_length=200)
 
 
 class ValueEdit(Strict):
@@ -559,7 +567,7 @@ class AIDecision(Version):
 def install(app, repository, provider):
     service = StudioService(repository, provider)
     from batch_studio import install as install_batch
-    install_batch(app, repository, provider)
+    install_batch(app, repository, provider, service)
 
     @app.get('/api/studio/master-template')
     def master_template(request: Request):

@@ -213,7 +213,7 @@ def _detail(batch, dat, summary, rows=None):
     return result
 
 
-def install(app, repository, provider):
+def install(app, repository, provider, studio_service=None):
     def load(request, pid, version=None):
         p = repository().load(request.state.owner, pid)
         if version is not None: check_version(p, version)

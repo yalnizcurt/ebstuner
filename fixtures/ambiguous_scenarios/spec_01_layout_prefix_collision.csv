@@ -1,0 +1,4 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+RECORD_TYPE,1,2,2,CHAR,Fixed Text (Exact Width),POSITION,YES
+BATCH_ID,3,7,5,CHAR,Trailing Space Padded,POSITION,YES
+DETAIL,8,20,13,CHAR,Trailing Space Padded,POSITION,YES

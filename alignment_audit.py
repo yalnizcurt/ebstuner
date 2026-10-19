@@ -55,6 +55,46 @@ INSTRUCTIONS = (
 RULE_KINDS = frozenset(RuleProposal.model_fields['kind'].annotation.__args__)
 
 
+def evidence_batches(analysis: dict) -> list[dict]:
+    """Review all candidate fields in bounded slices; byte ledgers stay local."""
+    candidates = analysis.get('candidates', [])
+    identifiers = list(dict.fromkeys(field['id'] for candidate in candidates for field in candidate.get('fields', [])))
+    if not identifiers:
+        raise ValueError('No candidate field mapping is available; supply source boundaries or correct the specification')
+    packages = []
+    def append(group):
+        selected = set(group)
+        scoped = {key: analysis.get(key) for key in ('record', 'status', 'reason', 'exhaustive',
+                  'structural_status', 'validation_status', 'search_scope', 'certification', 'resource_limit_reached')}
+        scoped['candidates'] = [
+            {**{key: candidate.get(key) for key in ('id', 'score', 'certified', 'validation_status')},
+             'fields': [{key: value for key, value in field.items() if key in
+                         ('id', 'hard_valid', 'source_start', 'source_end', 'target_start', 'target_end', 'findings')}
+                        for field in candidate['fields'] if field['id'] in selected]}
+            for candidate in candidates if any(field['id'] in selected for field in candidate['fields'])]
+        scoped['signatures'] = [item for item in analysis.get('signatures', []) if item.get('id') in selected]
+        scoped['spec_conflicts'] = [item for item in analysis.get('spec_conflicts', [])
+                                    if item.get('field_id', item.get('fieldId')) in selected]
+        scoped['provenance'] = {'source_bytes_accounted_for': (analysis.get('provenance') or {}).get('source_bytes_accounted_for')}
+        size = len(json.dumps(scoped, ensure_ascii=True, default=_reject_non_json).encode())
+        if size > 24_000:
+            if len(group) == 1:
+                raise ValueError('One field exceeds the supported AI evidence budget; review its specification constraints')
+            middle = len(group) // 2
+            append(group[:middle]); append(group[middle:])
+            return
+        package = evidence_package(scoped)
+        package['coverage'] = {'field_ids': group, 'total_fields': len(identifiers),
+                               'candidate_ids': [candidate['id'] for candidate in candidates],
+                               'ledger_review': 'Byte preservation verified locally; this request reviews field mappings'}
+        package.pop('evidence_id')
+        package['evidence_id'] = hashlib.sha256(json.dumps(package, sort_keys=True).encode()).hexdigest()
+        packages.append(package)
+    for start in range(0, len(identifiers), 24):
+        append(identifiers[start:start + 24])
+    return packages
+
+
 def evidence_package(analysis: dict) -> dict:
     """Send a bounded, immutable snapshot of the actual candidate evidence."""
     if not isinstance(analysis, dict) or not isinstance(analysis.get('candidates'), list):

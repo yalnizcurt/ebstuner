@@ -1,0 +1,4 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+ACCOUNT_NUM,1,10,10,CHAR,Trailing Space Padded,POSITION,UNKNOWN
+TRANS_AMOUNT,11,20,10,NUMBER,Leading zeroes,POSITION,UNKNOWN
+STATUS_FLAG,21,25,5,CHAR,Trailing Space Padded,POSITION,UNKNOWN

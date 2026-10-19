@@ -1,0 +1,4 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+ITEM_ID,1,5,5,CHAR,Fixed Text (Exact Width),POSITION,YES
+AMOUNT,6,15,10,"NUMBER(8,2)",Leading zeroes,POSITION,YES
+QUANTITY,16,20,5,INTEGER EXTERNAL,Leading zeroes,POSITION,YES

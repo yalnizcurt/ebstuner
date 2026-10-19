@@ -1,0 +1,5 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+ANCHOR_1,1,4,4,"'TAG:'",Fixed Text (Exact Width),CONSTANT,YES
+PAYLOAD_1,5,10,6,CHAR,Trailing Space Padded,POSITION,YES
+ANCHOR_2,11,14,4,"'TAG:'",Fixed Text (Exact Width),CONSTANT,YES
+PAYLOAD_2,15,20,6,CHAR,Trailing Space Padded,POSITION,YES

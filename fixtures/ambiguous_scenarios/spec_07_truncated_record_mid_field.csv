@@ -1,0 +1,5 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+FIELD_A,1,10,10,CHAR,Fixed Text (Exact Width),POSITION,YES
+FIELD_B,11,20,10,CHAR,Fixed Text (Exact Width),POSITION,YES
+FIELD_C,21,30,10,CHAR,Fixed Text (Exact Width),POSITION,YES
+FIELD_D,31,40,10,CHAR,Fixed Text (Exact Width),POSITION,YES

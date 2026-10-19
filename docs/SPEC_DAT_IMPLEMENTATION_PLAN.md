@@ -1,172 +1,135 @@
-# Spec–DAT Validation Studio: implementation plan
+# DAT Studio improvement plan
 
-Status: proposed plan for review. This document does not authorize implementation or change application behavior.
+Updated: 19 October 2026. Based on the application review and reproduced defects.
+This replaces the earlier plan. The changes below are planned, not implemented.
 
 ## 1. Product outcome
 
-Help a consultant turn a mostly correct but poorly formatted DAT file into a reviewed file that conforms to an approved specification, without counting spaces or editing raw records.
+**Upload specification documents and DAT → Resolve exceptions → Download a specification-aligned DAT.**
 
-The primary workflow is:
+The same engine must support different record identifiers, layouts, field counts, lengths, padding conventions and supported types from the approved specification. A valid input downloads unchanged. A repairable input has a working correction path. An unsafe or unresolved input explains exactly what is missing.
 
-**Upload spec + DAT → AI interprets spec → consultant corrects and saves spec → analyze DAT → review values beside spec → system formats and validates → download DAT.**
+Never invent specification values, silently weaken approved rules, or automatically change meaningful DAT values. The user's decision to retain the existing `4` / `04` conflict remains in force; it must remain visible and block conformity until explicitly resolved.
 
-The product must work with uploaded CSV, XLSX, and Markdown specifications. The three supplied scenarios are regression examples, not built-in business rules. A CTL upload is not required for this workflow.
+## 2. One user journey
 
-## 2. Consultant experience
-
-Use a restrained enterprise finance layout informed by the public HighRadius and BlackLine screens: compact navigation, a small action toolbar, a large review table, clear statuses, and visible issue resolution. Keep technical diagnostics out of the primary workflow. Show tables and explanations rather than JSON or prompts.
-
-### Upload
-
-- Accept one spec document and a DAT file; identify relevant worksheets or sections when necessary.
-- Preserve the uploaded documents and original DAT bytes before analysis.
-- Show file validation, analysis progress, queued AI work, and recoverable failures in plain language.
-
-### Review spec
-
-AI interprets the source into a draft table containing every supplied field and these ten columns:
-
-1. Field Name
-2. Category / Functional Group
-3. Mapping Type
-4. Start Pos
-5. End Pos
-6. Length
-7. Data Type / Oracle Conversion Function
-8. Padding / Alignment Rule
-9. Raw Sample Value in DAT File (Quoted)
-10. Cleansed Output in Oracle Staging Table
-
-Preserve the source text and location behind each interpretation. Highlight missing, ambiguous, or contradictory rules. Do not fill uncertainty with invented values. Keep extra source metadata available for review.
-
-The consultant can correct the draft and select **Save approved spec**. Store an immutable approved version, its interpreted rules, the source document identity, and who approved it. Validate positions and lengths before approval; do not silently renumber positions when a field changes.
-
-### Review DAT
-
-Keep the ten spec columns and append:
-
-| Added column | Behavior |
-| --- | --- |
-| Original DAT value | Read-only source reading; unclear boundaries are labelled Needs review |
-| Value to use | Editable data only; blank is distinguished from a missing required value |
-| Spec match | Passed and total applicable checks, plus percentage when all checks are evaluable |
-| Issue / action | Plain-language failure and an explicit action where needed |
-
-Freeze the field name, support horizontal table scrolling, and offer a record selector plus **Next issue**. Keep original and edited values distinguishable. Support keyboard editing, undo, and saving/reopening work. The consultant should not need to choose alignment separately for each edit: it comes from the approved spec.
-
-### Validate and download
-
-The system builds the candidate DAT, validates those exact bytes, and enables **Download DAT** only when the current spec is approved, required AI stages are complete, required checks pass, and unresolved interpretations are cleared. Any subsequent edit invalidates the downloadable result.
-
-## 3. AI responsibilities and API budget
-
-Use Groq `openai/gpt-oss-120b`. AI is a required pipeline stage for spec interpretation and DAT analysis; an unavailable required AI stage remains pending rather than being presented as complete. A compatible, unchanged cached AI result can satisfy that stage.
-
-Parse CSV/XLSX/Markdown locally first so exact source values do not need to be rewritten by the model. Ask AI to interpret headings, mapping semantics, unclear rules, and relevant field groups. For DAT analysis, send compact layout information, grouped findings, and representative records or affected slices. Every DAT record still receives local validation, even if only representative evidence is sent to AI.
-
-AI proposes typed, declarative validation rules and explanations. The application validates the response against a strict internal contract and executes only supported rule types. Model-generated code, SQL, and file-writing instructions are never executed. Original values and proposed repairs must refer to known source records and fields; stale or unsupported responses are rejected.
-
-| Control | Planned behavior |
-| --- | --- |
-| Request ceiling | Input plus reserved completion must stay at or below 8,048 tokens, including instructions, schemas, and reasoning |
-| Working budget | Initially target approximately 5,000 input and 2,000 completion tokens; reduce payloads to leave headroom |
-| Token measurement | Use a model-compatible local tokenizer and verify estimates against returned usage; never substitute a byte-length cap for token accounting |
-| Normal call target | Approximately one spec-analysis call and one DAT-review call for small inputs; additional bounded batches when completeness requires them |
-| Editing | No API call on each keystroke, cell focus, navigation, or unchanged refresh |
-| Batching | Group related fields and duplicate issues; track coverage so no field disappears between batches |
-| Caching | Key results by organization/project scope, relevant content hashes, model, and interpretation/rule version; invalidate affected results after changes |
-| Scheduling | Shared, durable queue; initially one active Groq request per configured credential scope |
-| Quotas | Reserve the request budget before dispatch; enforce request, token-per-minute, and daily limits across users and application workers |
-| Throttling | Respect response quota/reset headers and Retry-After; show queued status rather than repeatedly calling the provider |
-| Retries | Bounded transient retries through the same queue; no retry loop for authentication, invalid schema, or permanent failures |
-| Audit | Record call purpose, result status, usage, and relevant versions without logging keys or unnecessary financial values |
-
-Do not make routine live API calls during development tests. Use recorded synthetic responses and a small, explicit live acceptance run.
-
-## 4. Spec and file validation rules
-
-The saved spec is authoritative. Sample values illustrate a format unless the spec explicitly defines a constant or allowed value.
-
-- Model applicable layouts and routing conditions for different record types. Do not assume that every line has the same layout or that the first two characters always identify its type.
-- Distinguish physical fields, filler/reserved areas, constants, and system-generated mappings. A generated mapping does not require an artificial DAT position.
-- Check position, width, padding, requiredness, text/numeric/date format, and permitted values where specified. Flag unexplained overlaps and conflicting writes; do not reject legitimate shared source slices merely because two mappings read them.
-- Keep the source datatype/conversion text. Separate it internally into supported checks and conversion behavior. Unsupported functions or environmental dependencies remain explicitly unresolved.
-- Confirm file encoding, record format, length rules, and line endings. Oracle POSITION offsets are byte based; do not equate characters and bytes for multibyte input.
-- Preserve leading zeros in identifiers and use exact decimal handling for money.
-- Reject overlength values, unencodable characters, and line breaks or control characters that violate the approved layout. Never silently truncate, round, replace, or invent business values.
-- Apply transformations only when the approved spec requires them. A local staging-value preview must be labelled as a preview, not a database result.
-
-### Data-only editing
-
-Remove surrounding space padding from the editable value and visibly normalize pasted boundary spaces. Preserve permitted internal spaces. Blank filler and padding bytes are system managed. Reject prohibited internal whitespace instead of silently deleting it.
-
-The formatter uses the approved rules to place each value and fill required spaces or other explicitly defined padding. For example, a 20-byte field containing `ABC Trading` gets nine trailing ASCII spaces when its rule requires left alignment and right space padding. The consultant enters only `ABC Trading`.
-
-If damaged spacing makes field boundaries uncertain, show the positional reading and proposed interpretation separately. Require confirmation before applying a proposed relocation. Preserve unrelated bytes and record order; recalculate any specified count or total through an approved rule and review it when affected.
-
-### Match percentage
-
-For an evaluable field, calculate `passed applicable checks / total applicable checks × 100`, with the check list available to the user. Recalculate the working score after edits and system formatting while preserving the original reading and its initial findings.
-
-Do not display AI self-reported certainty as spec match. Unknown checks produce **Needs review** or **Not verified**, and inapplicable checks are excluded. Zero applicable checks do not produce 100%. File results must disclose unresolved checks and blockers; a high average cannot permit a failed required field to export.
-
-## 5. Implementation sequence and completion gates
-
-| Phase | Deliverable | Completion gate |
+| Step | User experience | Application responsibility |
 | --- | --- | --- |
-| 1. Agree on behavior | Confirm unresolved cases and the table workflow; define supported conversions and deployment scale | Product decisions below are recorded before dependent implementation |
-| 2. Import and spec interpretation | Bounded CSV/XLSX/MD extraction, AI interpretation, source references, editable ten-column table | All source fields are accounted for; ambiguity prevents approval |
-| 3. Approval and persistence | Versioned approved specs, project isolation, immutable sources, restart-safe state | Reopening reproduces the approved version; stale changes are rejected |
-| 4. Validation and DAT review | Approved declarative rules, layout routing, per-field results, batched AI analysis, merged table | Every record has a known validation outcome; uncertain extraction is visible |
-| 5. Editing and generation | Data-only inputs, automatic formatting, undo, exact-byte validation, download gate | Exported bytes are the same bytes that passed validation; editing revokes old results |
-| 6. Production readiness | Identity/access integration, durable AI queue, operational controls, consultant acceptance | Security, recovery, rate-limit, correctness, usability, and load acceptance checks pass |
+| Upload | Select one or several specifications and DAT files; select **Check files** | Preserve originals, extract rules, identify layouts and show coverage |
+| Resolve exceptions | Review grouped problems with a direct **Resolve** action | Validate, propose safe mappings, collect missing decisions and recheck results |
+| Download | Select **Download aligned DAT** | Validate exact output bytes; include a concise change and coverage report |
 
-Implement in the existing application rather than maintaining a separate demonstration. Preserve existing projects and CTL APIs during migration; the new consultant workflow becomes the main entry point. A CTL may remain an advanced compatibility input, but it must not silently override an approved spec.
+One file and several files use this same journey. Allow missing specifications to be added to an existing project without restarting. Keep the full 23-column master template, byte inspector and AI evidence under **Details**.
 
-### Existing code to reuse and extend
+Retain the blue, orange and green design. Pair colours with clear status labels. Show the next required action instead of a large unexplained error count.
 
-| Area | Existing locations | Intended change |
-| --- | --- | --- |
-| Source import | spreadsheets.py | Reuse bounded CSV/XLSX extraction; add Markdown and spec-specific extraction without breaking evidence imports |
-| Spec and response contracts | models.py; compiler.py where applicable | Add approved spec/rule contracts; adapt supported rules to the existing engine without executing generated SQL |
-| State and audit | projects.py | Persist source documents, spec versions, AI jobs/results, approvals, and invalidation rules; use transactional updates |
-| AI integration | groq_provider.py; ai.py; existing response-contract helpers | Add spec/DAT analysis contracts, token budgeting, batching, validated caching, and quota-aware scheduling |
-| HTTP workflow | web.py | Add spec upload/review/approve and analysis-job endpoints; enforce authorization and export gates server side |
-| Consultant interface | index.html; static/app.js; static/style.css | Replace the primary CTL-first journey with three simple stages and the merged review table |
-| Verification and guidance | tests/; .env.example; README.md; docs/ | Update fixtures, meaningful regression tests, safe configuration examples, API contracts, deployment and recovery instructions |
+## 3. Specification model
 
-Use the existing table/editor capabilities first. Select a different grid library only if measured usability or supported volume requires it, with licensing reviewed before adoption.
+Extend the existing model only where necessary:
 
-## 6. Production acceptance
+| Level | Defines |
+| --- | --- |
+| File | Encoding, record boundaries, line endings and supported framing |
+| Record | Identifiers, routing conditions, length and applicable fields |
+| Field | Stable ID, position, width, datatype, mandatory status, padding and constraints |
+| Relationships | Declared ordering, groups, parent-child links, counts and totals |
 
-Do not describe the application as enterprise ready solely because it has enterprise styling. Before a production release, verify:
+Separate physical DAT fields from Oracle-generated values and database conversion metadata. Preserve duplicate names through stable field and layout IDs. Samples remain examples unless explicitly declared as constants or allowed values.
 
-- Organization sign-in and project permissions, with attributable approvals and no cross-project or cross-organization cache leakage. A shared workspace password alone is insufficient for user-level audit.
-- Private backend credentials, TLS, bounded uploads and decompression, escaped source/model text, protected write endpoints, and no execution of spreadsheet formulas or model instructions.
-- Immutable originals, transactional edits, spec/data version checks, accurate audit records, and no retention cleanup that silently removes active or approved work. Define retention with the operator.
-- Durable jobs that survive restarts, duplicate-submit protection, shared quota reservations, Retry-After handling, and safe recovery after provider or worker failure.
-- A documented supported file size, row count, concurrent-user envelope, and response-time target established by load testing. Reuse current storage within verified limits; change storage when the agreed workload requires it.
-- Backup and restore verification, redacted operational logs, health/readiness checks, monitoring of AI queue/usage/failures, deployment configuration, migration and rollback procedures.
-- Consultant acceptance of the complete upload-to-download flow using synthetic examples and at least one additional unfamiliar spec layout.
+Classify applicable requirements as executable, needing clarification, unsupported, or dependent on the target environment. Preserve Unknown mandatory statuses and their acknowledgment; acknowledgment does not establish full coverage.
 
-Required correctness cases include every one of the ten columns, multiple worksheets/Markdown sections, missing metadata, conflicting lengths, generated mappings, multiple record types, multibyte input, permitted internal spaces, overlength values, invalid numbers/dates, 4,800-byte fields/records where applicable, damaged internal spacing, unsupported conversions, stale approvals, and unchanged-file round trips.
+Arbitrary record names and layouts must require no code changes. Supported format families and resource limits must remain explicit. Reject unsupported framing or encoding before guessing how to read the data.
 
-Provider tests cover request token ceilings, reasoning/output reservation, oversized-spec batch coverage, malformed or truncated responses, cache invalidation, duplicate requests, shared quotas, daily exhaustion, 429 cooldowns, and restart recovery without consuming the live free-tier quota.
+## 4. Implementation milestones
 
-## 7. Decisions to settle before implementation
+### 1 — Make specification approval trustworthy
 
-1. Confirm that raw and cleansed sample values are examples unless explicitly declared constants.
-2. Confirm that AI may propose displaced-field interpretations but a consultant must approve their application.
-3. Decide how headers, trailers, or other records absent from the uploaded spec are handled. Proposed safe default: preserve original bytes, flag coverage as incomplete, and block validated download until the handling is explicitly approved.
-4. Confirm one-record-at-a-time review beside the spec, with Next issue navigation, as the initial interaction.
-5. Define deployment identity, expected concurrent consultants, representative file volumes, encoding expectations, and retention requirements before claiming production readiness.
+- Connect existing document/worksheet routing extraction to the actual upload paths. Reconcile it with master-template routing.
+- Preserve extraction errors through import, revision, approval and compilation. Missing source rows cannot disappear from approval checks.
+- Retain numeric precision and scale. Distinguish target `NUMBER(p,s)` from SQL*Loader external field-width syntax. Reject unsupported semantics until implemented.
+- Surface uncompiled requirements in extra columns and prose; retained metadata is not verified coverage.
+- Share normalization and compilation between single-file and multi-file workflows.
 
-No EBS submission or database execution is included in this plan. Spec conformity and business-data correctness are separate claims; an actual SQL*Loader/EBS acceptance test requires the target configuration and environment.
+**Acceptance:** A source condition requiring `AA` rejects `BB`; an unnamed nonempty source row blocks approval; `NUMBER(3,2)` cannot accept `123456`; unsupported requirements remain visible.
 
-## References
+**Code:** `specs.py`, `validation_pipeline.py`, `studio.py`, `batch_studio.py`.
 
-- [HighRadius public interface guide](https://cloud5g.highradius.com/RRDMSProject/help/global/Content/Order%20to%20Cash/Collections%20Management/Updated%20Collections%20Cloud/Navigating%20the%20System.htm)
-- [BlackLine public product screen](https://a.storyblok.com/f/299767/1175x710/77b42d18a6/blackline-cash-application-revolutionary-tech.jpg/m/0x400)
-- [Groq rate limits and response headers](https://console.groq.com/docs/rate-limits): account-specific limits and response headers take precedence over published defaults.
-- [Groq GPT-OSS 120B model](https://console.groq.com/docs/model/openai/gpt-oss-120b)
-- [Oracle SQL*Loader field list reference](https://docs.oracle.com/en/database/oracle/oracle-database/19/sutil/oracle-sql-loader-field-list-contents.html)
+### 2 — Complete the structural correction workflow
+
+- Reuse TASAA signatures, positional checks, anchors, alternatives and beam search.
+- Add one mapping-resolution action: source ranges, proposed field boundaries, preserved values, padding changes and reconstructed preview.
+- Save decisions against source checksum and specification version. Reject stale decisions.
+- Verify every source byte is accounted for and meaningful values are preserved. Human approval cannot waive these checks.
+- Keep explicit value edits separate, with audit history and fresh validation.
+- When no defensible mapping exists, identify the missing evidence or corrected source needed. A search limit must not imply that repair is impossible.
+
+**Acceptance:** Missing padding completes through preview, approval and download. Ambiguity resolves only with sufficient evidence. Confirmation alone cannot clear uncertainty, and unexplained non-padding bytes cannot be discarded.
+
+**Code:** `tasaa.py`, `specs.py`, studio services and `static/app.js`.
+
+### 3 — Validate the complete file
+
+- Implement declared ordering, required record occurrences, group membership, parent-child references, counts and control totals.
+- Check mixed layouts together in original order, including relationships across specifications.
+- Identify Oracle lookups, database sequences and environment-dependent checks separately.
+- Do not automatically invent missing business records or rewrite amounts, counts or totals. Require an evidenced user correction when needed.
+- Revalidate field, record and file rules against the exact reconstructed bytes.
+
+**Acceptance:** Individually valid rows fail when a declared trailer is missing, a relationship is broken or a total is wrong. Complete mixed-record files pass without hardcoded business identifiers.
+
+**Code:** `validation_pipeline.py`, `specs.py`, `batch_studio.py`.
+
+### 4 — Make AI review bounded and recoverable
+
+- Keep Groq for local testing and retain the configured production provider path.
+- Keep full byte ledgers locally. Reuse compact evidence packaging and durable jobs.
+- Split oversized evidence into bounded requests with coverage tracking; replace permanent evidence-size failures with resumable processing.
+- Allow complete machine-readable specifications to proceed through deterministic checks and human approval. Use AI for interpretation and independent review of uncertainty; required uncertainty reviews remain pending until complete.
+- Reconcile AI advice deterministically. Specification changes require new approval; AI cannot change values or waive constraints.
+- Resume remaining work after failures and invalidate affected reviews after edits. Never present partial evidence as complete coverage.
+
+**Acceptance:** A valid 180-field, 20,016-byte record completes required review and download. Retries resume saved progress. Unsupported or unsafe AI proposals are rejected.
+
+**Code:** `alignment_audit.py`, `studio.py`, `batch_studio.py`, existing provider and budget modules.
+
+### 5 — Unify the screens
+
+- Replace separate single-file and batch journeys with the three steps above, using shared services. Preserve existing projects and CTL compatibility.
+- Group repeated findings by cause. One shifted boundary should lead to one alignment decision, with dependent errors available in Details.
+- Give each blocker a working action: attach a layout, clarify a rule, review a mapping, correct a value or retry processing.
+- Distinguish unsupported formats/rules, incomplete or contradictory specifications, ambiguous mappings, invalid data and processing failures.
+- Show one download action, approved specification version, changes and coverage. Relevant edits invalidate prepared output.
+
+**Acceptance:** Users complete the journey without entering JSON, counting spaces or switching workspaces. Every displayed action works. Saved reviews reopen with decisions and remaining work intact.
+
+**Code:** `index.html`, `static/app.js`, `static/style.css`, studio HTTP handlers.
+
+## 5. Verification and release gate
+
+Add focused regression tests with each milestone. Finish with browser tests that compare downloaded bytes with expected output.
+
+| Case | Required result |
+| --- | --- |
+| Compliant DAT | Byte-identical output, including record endings |
+| Verified missing/extra padding | Expected repair; meaningful values unchanged |
+| Ambiguous mapping | Blocked until a valid evidenced decision is saved |
+| Missing or conflicting specification | Exact source issue; no invented values |
+| Mixed record types | Every record routed once; declared relationships checked |
+| Unsupported format/rule | Explicit unsupported result; no false validation claim |
+| Invalid value/unexplained bytes | Actionable finding; no automatic substitution or deletion |
+| AI outage, oversized evidence, restart | Saved progress resumes; coverage remains truthful |
+| Changed specification or data | Affected old approvals and reviews invalidated |
+
+Use at least five independently generated specifications with different identifiers, layouts, field counts, padding, types and lengths. Include 180+ fields and records exceeding 20,000 bytes. Exercise unchanged output, provably repairable input, human-resolved ambiguity and justified rejection. Returning no candidate for every damaged case is not successful generalization.
+
+Retain Scenario 3/OVP and the supplied standalone-deduction files as regressions. Include duplicate field names, missing padding, type mismatches, precision/scale, routing metadata and file totals. Add property-based byte-accounting and preservation tests. Browser tests must cover correction, save/reopen and download, using synthetic AI responses for routine runs.
+
+Release only after supported upload-to-download journeys pass. Report results by behavior, downloaded-byte comparisons and remaining limitations. Test counts alone are insufficient.
+
+## 6. Keep the implementation small
+
+Reuse current persistence, providers, validation and byte-preservation machinery. Consolidate duplicated workflow code as shared paths replace it. No new frontend framework, database or demonstration application is needed.
+
+The deliverable is a DAT conforming to the approved supported specification, with a concise audit. Direct EBS submission and additional document/binary format families are separate extensions. Actual Oracle acceptance requires the target control file, configuration and import run.
+
+References: [Oracle transmission formats](https://docs.oracle.com/cd/E26401_01/doc.122/f10310/T447343T454906.htm), [AutoLockbox validation](https://docs.oracle.com/cd/E18727_01/doc.121/e13522/T355475T382159.htm).

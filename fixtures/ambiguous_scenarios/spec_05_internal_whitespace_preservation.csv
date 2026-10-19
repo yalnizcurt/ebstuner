@@ -1,0 +1,3 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+COMPANY_NAME,1,30,30,CHAR,Trailing Space Padded (Left Aligned),POSITION,YES
+STREET_ADDR,31,60,30,CHAR,Trailing Space Padded (Left Aligned),POSITION,YES

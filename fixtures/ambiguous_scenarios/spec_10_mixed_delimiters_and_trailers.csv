@@ -1,0 +1,3 @@
+Field Name,Start Pos,End Pos,Length,Data Type / Oracle Conversion Function,Padding / Alignment Rule,Mapping Type,Mandatory
+REC_ID,1,5,5,CHAR,Fixed Text (Exact Width),POSITION,YES
+PAYLOAD,6,25,20,CHAR,Trailing Space Padded,POSITION,YES

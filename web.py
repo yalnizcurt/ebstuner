@@ -460,6 +460,8 @@ def audit(pid: str, request: Request):
 
 
 def active_provider():
+    if os.getenv('BEDROCK_MOCK', '').lower() in ('true', '1', 'yes'):
+        return configured_provider()
     p = globals().get('provider')
     if p is not None and not isinstance(p, AmazonBedrockProvider):
         return p
